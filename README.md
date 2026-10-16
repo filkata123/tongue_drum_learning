@@ -8,7 +8,8 @@ Made for a 13" 15-note D major tongue drum (low F# to high F#), using the number
 on most tongue drums: `1`–`7` for the middle row, a dot below for the lower notes and a dot above
 for the upper notes.
 
-It runs in the browser on a laptop, phone or tablet.
+It runs in the browser on a laptop, phone or tablet:
+**https://filkata123.github.io/tongue_drum_learning/**
 
 - Press **Start** and play the big number. It turns green and moves on when you hit the right note.
 - If you hit a different note, it shows what you played.
@@ -16,16 +17,17 @@ It runs in the browser on a laptop, phone or tablet.
 - When a melody is finished it moves on to the next one, and remembers where you left off.
 - On phones it keeps the screen awake while you practise.
 
-## Running it
+## Running it locally
 
 ```bash
 python -m http.server 8000
 ```
 
 Then open http://localhost:8000 and allow the microphone. Phones only allow the microphone over
-`https://`, so to use it on a phone it needs to be hosted (e.g. GitHub Pages).
+`https://`, so use the GitHub Pages link above on a phone.
 
 If you change the code, reload with **Ctrl+Shift+R** so the browser doesn't keep the old version.
+Pushing to `main` updates the GitHub Pages site within a few minutes.
 
 ## Extras
 
