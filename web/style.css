@@ -1,0 +1,156 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #111827;
+  color: #f9fafb;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+.screen {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+[hidden] { display: none !important; }
+
+/* Start screen */
+h1 { font-weight: 600; font-size: 2rem; margin: 0 0 2rem; color: #9ca3af; }
+
+#start-btn {
+  font: inherit;
+  font-size: 2.5rem;
+  font-weight: 700;
+  padding: 1.5rem 4rem;
+  border: none;
+  border-radius: 999px;
+  background: #22c55e;
+  color: #052e16;
+  cursor: pointer;
+}
+#start-btn:active { transform: scale(0.97); }
+
+.hint { color: #6b7280; text-align: center; max-width: 30rem; padding: 0 1rem; }
+.error { color: #f87171; text-align: center; max-width: 30rem; padding: 0 1rem; }
+
+/* Play screen */
+#play { justify-content: space-between; }
+
+header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem 0;
+  color: #9ca3af;
+  font-size: 1.1rem;
+}
+
+#progress { display: flex; gap: 0.4rem; }
+#progress .dot {
+  width: 0.7rem; height: 0.7rem;
+  border-radius: 50%;
+  background: #374151;
+}
+#progress .dot.done { background: #22c55e; }
+#progress .dot.now { background: #f9fafb; }
+
+#stage {
+  flex: 1;
+  width: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#current {
+  font-size: min(62dvh, 70vw);
+  font-weight: 700;
+  line-height: 1;
+  transition: color 0.15s;
+}
+#stage.hit #current { color: #22c55e; }
+#stage.miss #current { color: #f87171; animation: shake 0.3s; }
+
+#next-box {
+  position: absolute;
+  top: 0.5rem;
+  right: 1.5rem;
+  color: #6b7280;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+#next { font-size: 3rem; font-weight: 700; color: #9ca3af; }
+
+/* A note: a digit with an octave dot above (high) or below (low). */
+.note { position: relative; display: inline-block; }
+.note.high::before, .note.low::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 0.13em; height: 0.13em;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+.note.high::before { top: -0.1em; }
+.note.low::after { bottom: -0.12em; }
+
+footer {
+  width: 100%;
+  padding: 0 1.5rem 1rem;
+  text-align: center;
+  min-height: 4rem;
+}
+#feedback { font-size: 1.4rem; margin: 0 0 0.5rem; min-height: 1.8rem; color: #f87171; }
+#debug { font-family: ui-monospace, monospace; color: #6b7280; margin: 0 0 0.5rem; }
+
+#note-bars {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  margin: 0 auto 0.75rem;
+  max-width: 40rem;
+}
+#note-bars .col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
+#note-bars .track { position: relative; width: 100%; height: 6rem; background: #1f2937; border-radius: 2px; overflow: hidden; }
+#note-bars .bar { position: absolute; bottom: 0; width: 100%; background: #4b5563; }
+#note-bars .bar.above { background: #22c55e; }
+#note-bars .floor { position: absolute; width: 100%; height: 2px; background: #f59e0b; }
+#note-bars .label { font-size: 0.9rem; font-weight: 700; color: #9ca3af; }
+
+#level {
+  height: 4px;
+  background: #1f2937;
+  border-radius: 2px;
+  overflow: hidden;
+}
+#level-bar { height: 100%; width: 0; background: #4b5563; transition: width 0.05s linear; }
+
+#done {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+#done .check { font-size: min(30dvh, 40vw); color: #22c55e; line-height: 1; }
+#done-text { font-size: 1.5rem; color: #d1d5db; }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-0.04em); }
+  75% { transform: translateX(0.04em); }
+}

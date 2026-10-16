@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>Tongue Drum Practice</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="start" class="screen">
+    <h1>Tongue Drum</h1>
+    <button id="start-btn" type="button">Start</button>
+    <p id="start-hint" class="hint">Allow the microphone when asked, then play the number you see.</p>
+    <p id="start-error" class="error" hidden></p>
+  </main>
+
+  <main id="play" class="screen" hidden>
+    <header>
+      <span id="melody-name"></span>
+      <span id="progress"></span>
+    </header>
+
+    <div id="stage">
+      <div id="current"></div>
+      <div id="next-box">next <span id="next"></span></div>
+    </div>
+
+    <footer>
+      <p id="feedback"></p>
+      <p id="debug" hidden></p>
+      <div id="note-bars" hidden></div>
+      <p id="sim-hint" class="hint" hidden>Sim mode: keys 1–7 = middle row, Z X C V B = lower 3–7, 8 9 0 = upper 1–3</p>
+      <div id="level"><div id="level-bar"></div></div>
+    </footer>
+
+    <div id="done" hidden>
+      <div class="check">✓</div>
+      <div id="done-text"></div>
+    </div>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

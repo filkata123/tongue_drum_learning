@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Detector tests</title>
+  <style>body { font-family: ui-monospace, monospace; background: #111827; color: #f9fafb; padding: 1rem; } .fail { color: #f87171; } .pass { color: #22c55e; }</style>
+</head>
+<body>
+  <h1>Note detector tests</h1>
+  <pre id="out"></pre>
+  <script type="module">
+    // Cache-busted so a plain reload always tests the latest code.
+    const bust = `?v=${Date.now()}`;
+    const { NOTE_BY_ID, DRUM_NOTES } = await import(`./notes.js${bust}`);
+    const { NoteListener, CONFIG } = await import(`./pitch.js${bust}`);
+
+    const SR = 48000, WIN = CONFIG.windowSize, HOP = 800; // ~60 frames per second, like requestAnimationFrame
+    const out = document.getElementById("out");
+    const results = [];
+
+    // Render strikes [{ id, at (s), amp, detune (cents), fund, beat, sym }] into one signal, drum-ish:
+    // fundamental + weaker harmonics + an inharmonic partial, exponential decay, a little noise.
+    // Real-drum quirks: `beat` = { depth, hz } makes the volume wobble; `sym` = { id, gain } makes a
+    // neighbouring tongue slowly ring along.
+    // Every signal starts with LEAD seconds of just noise, like the moment after pressing Start.
+    const LEAD = 1.2;
+    function render(strikes, seconds, { noise = 0.002, seed = 1 } = {}) {
+      const sig = new Float32Array(Math.ceil((seconds + LEAD) * SR));
+      let s = seed;
+      const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647) * 2 - 1;
+      for (let i = 0; i < sig.length; i++) sig[i] = rand() * noise;
+      for (const st of strikes) {
+        const f = NOTE_BY_ID[st.id].freq * Math.pow(2, (st.detune || 0) / 1200);
+        const start = Math.floor((st.at + LEAD) * SR);
+        for (let i = start; i < sig.length; i++) {
+          const t = (i - start) / SR;
+          let env = (st.amp ?? 0.3) * Math.min(1, t / 0.003) * Math.exp(-t * 2.5);
+          if (st.beat) env *= 1 - st.beat.depth * 0.5 * (1 - Math.cos(2 * Math.PI * st.beat.hz * t));
+          sig[i] += env * ((st.fund ?? 1) * Math.sin(2 * Math.PI * f * t)
+            + 0.25 * Math.sin(2 * Math.PI * 2 * f * t) * Math.exp(-t * 4)
+            + 0.1 * Math.sin(2 * Math.PI * 2.76 * f * t) * Math.exp(-t * 8));
+          if (st.sym) {
+            const fs = NOTE_BY_ID[st.sym.id].freq;
+            sig[i] += env * st.sym.gain * (1 - Math.exp(-t / 0.3)) * Math.sin(2 * Math.PI * fs * t);
+          }
+        }
+      }
+      return sig;
+    }
+
+    function runListener(sig) {
+      const l = new NoteListener(SR);
+      const events = [];
+      for (let end = WIN; end <= sig.length; end += HOP) {
+        const e = l.process(sig.subarray(end - WIN, end), (end / SR) * 1000);
+        if (e) events.push(e.note.id);
+      }
+      return events;
+    }
+
+    function check(name, got, want) {
+      const ok = JSON.stringify(got) === JSON.stringify(want);
+      results.push({ name, ok });
+      out.innerHTML += `<span class="${ok ? "pass" : "fail"}">${ok ? "PASS" : "FAIL"}</span> ${name}\n`
+        + (ok ? "" : `     want ${JSON.stringify(want)}\n     got  ${JSON.stringify(got)}\n`);
+    }
+
+    // Every tongue, alone, in tune and ±30 cents out of tune.
+    for (const n of DRUM_NOTES) {
+      for (const detune of [0, -30, 30]) {
+        const got = runListener(render([{ id: n.id, at: 0.3, detune }], 1.2));
+        if (JSON.stringify(got) !== JSON.stringify([n.id])) check(`tongue ${n.id} detune ${detune}`, got, [n.id]);
+      }
+    }
+    check("all 15 tongues, in tune and ±30¢", true, results.every((r) => r.ok));
+
+    check("single strike",
+      runListener(render([{ id: "5", at: 0.3 }], 1.5)), ["5"]);
+
+    check("neighbouring low notes F#3 then G3",
+      runListener(render([{ id: "_3", at: 0.3 }, { id: "_4", at: 0.8 }], 1.6)), ["_3", "_4"]);
+
+    check("song over ringing notes: Twinkle Twinkle, 0.6 s apart",
+      runListener(render(["1", "1", "5", "5", "6", "6", "5"].map((id, i) => ({ id, at: 0.3 + i * 0.6 })), 4.6)),
+      ["1", "1", "5", "5", "6", "6", "5"]);
+
+    check("scale, struck every 0.5 s",
+      runListener(render(["1", "2", "3", "4", "5", "6", "7", "˙1"].map((id, i) => ({ id, at: 0.3 + i * 0.5 })), 4.8)),
+      ["1", "2", "3", "4", "5", "6", "7", "˙1"]);
+
+    check("same note repeated while still ringing",
+      runListener(render([{ id: "1", at: 0.3 }, { id: "1", at: 0.7 }, { id: "1", at: 1.1 }], 2)), ["1", "1", "1"]);
+
+    check("full range, fast (0.3 s apart)",
+      runListener(render(["_3", "_5", "1", "3", "5", "7", "˙2", "˙3"].map((id, i) => ({ id, at: 0.3 + i * 0.3 })), 3.2)),
+      ["_3", "_5", "1", "3", "5", "7", "˙2", "˙3"]);
+
+    check("soft different note over a loud ringing one",
+      runListener(render([{ id: "1", at: 0.3, amp: 0.4 }, { id: "5", at: 0.9, amp: 0.1 }], 2)), ["1", "5"]);
+
+    check("quiet room noise produces nothing",
+      runListener(render([], 2, { noise: 0.004 })), []);
+
+    check("quiet strike still detected",
+      runListener(render([{ id: "3", at: 0.3, amp: 0.03 }], 1.5)), ["3"]);
+
+    // A headset mic: quiet overall, and it barely hears the lowest notes' fundamentals.
+    const headset = (ids, fund) => render(ids.map((id, i) => ({ id, at: 0.3 + i * 0.6, amp: 0.004, fund: fund(id) })),
+      0.9 + ids.length * 0.6, { noise: 0.0003 });
+    const lowIds = ["_3", "_4", "_5", "_6", "_7"];
+    check("headset: quiet strikes, whole drum",
+      runListener(headset(DRUM_NOTES.map((n) => n.id), () => 1)), DRUM_NOTES.map((n) => n.id));
+    check("headset: low notes with weak fundamentals",
+      runListener(headset(lowIds, () => 0.15)), lowIds);
+    check("middle F# is not mistaken for low F#",
+      runListener(headset(["3", "_3", "3"], (id) => (id === "_3" ? 0.15 : 1))), ["3", "_3", "3"]);
+    check("louder room noise produces nothing",
+      runListener(render([], 4, { noise: 0.02 })), []);
+
+    // Low notes on a real drum: the struck tongue wobbles in volume and its neighbour rings along.
+    const lowReal = (id, sym) => ({ id, amp: 0.05, beat: { depth: 0.7, hz: 3 }, sym: { id: sym, gain: 0.3 } });
+    check("low F# that wobbles and makes G ring along is one strike",
+      runListener(render([{ ...lowReal("_3", "_4"), at: 0.3 }], 2.5)), ["_3"]);
+    check("lower octave melody on a real-ish drum",
+      runListener(render(["_3", "_4", "_5", "_6", "_7"].map((id, i, a) => ({ ...lowReal(id, a[i + 1] || a[i - 1]), at: 0.3 + i * 1.2 })), 6.5)),
+      ["_3", "_4", "_5", "_6", "_7"]);
+
+    const failed = results.filter((r) => !r.ok).length;
+    out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
+    window.testResults = { failed, out: out.textContent };
+  </script>
+</body>
+</html>
