@@ -22,6 +22,23 @@ _Avoid_: Stick, beater
 A written-out piece in number notation, as found printed or online for tongue drums.
 _Avoid_: Score, tab
 
+**Two-line sheet**:
+A song sheet with a melody line on top and an accompaniment line below, bracketed together and
+played at the same time. Numbers stacked in the same column are struck together.
+_Avoid_: Double sheet, two-hand sheet
+
+**Melody line**:
+The top line of a two-line sheet; the tune.
+
+**Accompaniment line**:
+The bottom line of a two-line sheet; mostly lower notes that support the tune.
+_Avoid_: Bass line, harmony line, left-hand line
+
+**Chord**:
+Two tongues struck at the same moment. Strictly a "dyad" (a chord is three or more notes), but
+"2-note chord" is the usual term in tongue drum material.
+_Avoid_: Double stop, dyad, pair
+
 **Mode**:
 A way of practising in the app, with its own rules for when a note counts and when to move on.
 
