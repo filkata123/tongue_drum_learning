@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Two-tongue probe</title>
+  <style>body { font-family: ui-monospace, monospace; background: #111827; color: #f9fafb; padding: 1rem; }</style>
+</head>
+<body>
+  <h1>Two tongues struck together</h1>
+  <p>Throwaway experiment for the "two tongues at once" wayfinder task. Uses the same synthetic drum as test.html.</p>
+  <pre id="out">running…</pre>
+  <script type="module">
+    const bust = `?v=${Date.now()}`;
+    const { NOTE_BY_ID, DRUM_NOTES } = await import(`./notes.js${bust}`);
+    const { NoteListener, CONFIG } = await import(`./pitch.js${bust}`);
+
+    const SR = 48000, WIN = CONFIG.windowSize, HOP = 800;
+    const out = document.getElementById("out");
+    const NL = "\n";
+
+    // Same drum-ish synth as test.html (fundamental + harmonics + inharmonic partial, decay, noise).
+    const LEAD = 1.2;
+    function render(strikes, seconds, { noise = 0.002, seed = 1 } = {}) {
+      const sig = new Float32Array(Math.ceil((seconds + LEAD) * SR));
+      let s = seed;
+      const rand = () => ((s = (s * 16807) % 2147483647) / 2147483647) * 2 - 1;
+      for (let i = 0; i < sig.length; i++) sig[i] = rand() * noise;
+      for (const st of strikes) {
+        const f = NOTE_BY_ID[st.id].freq * Math.pow(2, (st.detune || 0) / 1200);
+        const start = Math.floor((st.at + LEAD) * SR);
+        for (let i = start; i < sig.length; i++) {
+          const t = (i - start) / SR;
+          const env = (st.amp ?? 0.3) * Math.min(1, t / 0.003) * Math.exp(-t * 2.5);
+          sig[i] += env * ((st.fund ?? 1) * Math.sin(2 * Math.PI * f * t)
+            + 0.25 * Math.sin(2 * Math.PI * 2 * f * t) * Math.exp(-t * 4)
+            + 0.1 * Math.sin(2 * Math.PI * 2.76 * f * t) * Math.exp(-t * 8));
+        }
+      }
+      return sig;
+    }
+
+    const cents = (a, b) => Math.abs(1200 * Math.log2(DRUM_NOTES[a].freq / DRUM_NOTES[b].freq));
+    const isOvertone = (lo, hi) => [2, 3].some((m) => Math.abs(1200 * Math.log2(DRUM_NOTES[hi].freq / (DRUM_NOTES[lo].freq * m))) < 35);
+
+    // Runs today's detector, and at the moment it decides on a strike also takes a "chord reading":
+    // every note that passes the detector's own "was struck" test, minus obvious overtones and bleed,
+    // with how much it rose. That's what a chord-aware detector could get from the same numbers.
+    function run(sig) {
+      const l = new NoteListener(SR);
+      const events = [];
+      let chord = null;
+      for (let end = WIN; end <= sig.length; end += HOP) {
+        const pending = l.collecting;
+        const e = l.process(sig.subarray(end - WIN, end), (end / SR) * 1000);
+        if (e) events.push(e.note.id);
+        if (pending && !l.collecting && !chord) {
+          const notes = l.reading.notes, floors = l.reading.floors, base = pending.before;
+          const rise = Array.from(notes, (n, k) => n - base[k]);
+          let struck = rise.map((r, k) => r >= floors[k] && notes[k] >= base[k] * CONFIG.minRiseRatio ? k : -1).filter((k) => k >= 0);
+          struck = struck.filter((k) => !struck.some((j) => j !== k && isOvertone(j, k) && rise[k] < rise[j] * 0.3));
+          struck = struck.filter((k) => !struck.some((j) => j !== k && cents(j, k) <= CONFIG.neighbourCents && notes[j] > notes[k] * CONFIG.neighbourRatio));
+          chord = struck.map((k) => ({ id: DRUM_NOTES[k].id, rise: rise[k] }));
+        }
+      }
+      return { events, chord: chord || [] };
+    }
+
+    // Notes whose rise is at least `x` times the biggest rise (power ratio).
+    function reading(chord, x) {
+      const top = Math.max(0, ...chord.map((c) => c.rise));
+      return chord.filter((c) => c.rise >= top * x).map((c) => c.id);
+    }
+    const isBoth = (g, r) => g.length === 2 && g.includes(r.A) && g.includes(r.B);
+
+    const pairs = [];
+    for (let a = 0; a < DRUM_NOTES.length; a++)
+      for (let b = a + 1; b < DRUM_NOTES.length; b++) pairs.push([a, b]);
+
+    const conditions = [
+      { name: "together, equal", gapMs: 0, ratio: 1 },
+      { name: "20 ms apart, equal", gapMs: 20, ratio: 1 },
+      { name: "50 ms apart, equal", gapMs: 50, ratio: 1 },
+      { name: "together, 2nd half as loud", gapMs: 0, ratio: 0.5 },
+      { name: "50 ms apart, 2nd half as loud", gapMs: 50, ratio: 0.5 },
+    ];
+
+    const XS = [0.01, 0.03, 0.1, 0.3];
+    const pct = (x, n) => `${Math.round((100 * x) / n)}%`.padStart(6);
+    const tick = () => new Promise((r) => setTimeout(r));
+    let html = `${pairs.length} tongue pairs per condition. Threshold x: a note counts if its rise is at least x times the biggest rise.` + NL + NL;
+
+    // Single strikes: a chord reading must not invent a second note.
+    const singles = [];
+    for (const n of DRUM_NOTES) { singles.push(run(render([{ id: n.id, at: 0.3 }], 1.0)).chord); await tick(); }
+    html += "SINGLE STRIKES, 15 tongues: share read as exactly one note" + NL;
+    for (const x of XS) html += `  x=${x}: ${pct(singles.filter((c) => reading(c, x).length === 1).length, 15)}` + NL;
+
+    html += NL + "TODAY'S DETECTOR on two tongues:     one note  both  other" + NL;
+    const rows = [];
+    for (const c of conditions) {
+      const runs = [];
+      for (const [a, b] of pairs) {
+        const A = DRUM_NOTES[a].id, B = DRUM_NOTES[b].id;
+        runs.push({ A, B, ...run(render([{ id: A, at: 0.3 }, { id: B, at: 0.3 + c.gapMs / 1000, amp: 0.3 * c.ratio }], 1.0)) });
+        await tick();
+      }
+      rows.push({ c, runs });
+      out.textContent = `done ${rows.length}/${conditions.length} conditions…`;
+      const one = runs.filter((r) => r.events.length === 1 && [r.A, r.B].includes(r.events[0])).length;
+      const both = runs.filter((r) => isBoth(r.events, r)).length;
+      html += `  ${c.name.padEnd(32)}${pct(one, runs.length)}${pct(both, runs.length)}${pct(runs.length - one - both, runs.length)}` + NL;
+    }
+
+    html += NL + "CHORD READING on two tongues: share read as exactly both notes, by threshold x" + NL
+      + `  ${"condition".padEnd(32)}${XS.map((x) => String(x).padStart(6)).join("")}` + NL;
+    const misses = {};
+    for (const { c, runs } of rows) {
+      html += `  ${c.name.padEnd(32)}${XS.map((x) => pct(runs.filter((r) => isBoth(reading(r.chord, x), r)).length, runs.length)).join("")}` + NL;
+      misses[c.name] = runs.filter((r) => !isBoth(reading(r.chord, 0.1), r)).map((r) => `${r.A}+${r.B}→[${reading(r.chord, 0.1).join(",")}]`);
+    }
+    html += NL + "WRONG READINGS at x=0.1 (struck → read)" + NL;
+    for (const [k, v] of Object.entries(misses)) html += `  ${k} (${v.length}): ${v.join("  ") || "none"}` + NL;
+    out.textContent = html;
+    window.chordResults = rows;
+  </script>
+</body>
+</html>
