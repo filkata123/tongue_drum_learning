@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Real-drum chord check</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { font-family: system-ui, sans-serif; background: #111827; color: #f9fafb; padding: 1rem; overflow: auto; }
+    main { max-width: 46rem; margin: 0 auto; }
+    #prompt { text-align: center; margin: 2rem 0; }
+    #pair { font-size: 6rem; font-weight: 800; line-height: 1.3; }
+    #how { font-size: 1.6rem; color: #fbbf24; }
+    #count, #heard { font-size: 1.1rem; color: #9ca3af; min-height: 1.5em; }
+    #heard.ok { color: #22c55e; }
+    #heard.bad { color: #f87171; }
+    button { font-size: 1.1rem; padding: 0.6rem 1.2rem; margin: 0.3rem; border-radius: 0.5rem; border: 0; cursor: pointer; }
+    #start { font-size: 1.5rem; background: #22c55e; }
+    pre { font-family: ui-monospace, monospace; font-size: 0.85rem; white-space: pre-wrap; }
+    .row { text-align: center; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Real-drum chord check</h1>
+  <p id="intro">Throwaway experiment for the wayfinder task "Record chords on the real drum and check the detector
+    hears both tongues". It asks for 82 strikes (about 10 minutes): a few single notes, then pairs of tongues struck
+    together. Put the laptop near the drum, in a quiet room, and press Start. Strike once per prompt, then wait for
+    the next one. If a strike went wrong (a slip, a missed tongue), press <b>Redo</b>. At the end, press both
+    <b>Save</b> buttons and put the two files in the <code>recordings/</code> folder.</p>
+  <div class="row"><button id="start">Start</button></div>
+  <div id="prompt" hidden>
+    <div id="count"></div>
+    <div id="pair"></div>
+    <div id="how"></div>
+    <div id="heard"></div>
+    <div class="row"><button id="redo">Redo last</button><button id="skip">Skip</button><button id="finish">Finish now</button></div>
+  </div>
+  <div id="saves" class="row" hidden><button id="save-wav">Save recording (.wav)</button><button id="save-json">Save results (.json)</button></div>
+  <pre id="summary"></pre>
+</main>
+<script type="module" src="chord-record.js"></script>
+</body>
+</html>
