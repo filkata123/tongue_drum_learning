@@ -49,3 +49,12 @@ _Avoid_: Free mode, practice mode
 **Timed mode**:
 A mode where notes must be hit in time with a beat.
 _Avoid_: Rhythm mode
+
+**Drum map**:
+A picture of the 15 tongues laid out as they sit on the drum in front of you.
+_Avoid_: Diagram, keyboard
+
+**Location hint**:
+A drum map with the target tongue lit, shown only when you're stuck on a step. It fades for each
+tongue separately as you find that tongue without it.
+_Avoid_: Highlight, help, cue
