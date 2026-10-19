@@ -78,3 +78,11 @@ _Avoid_: Ruleset, export rules
 **My songs**:
 The songs you've pasted into the app, saved on that device only.
 _Avoid_: Library, custom songs
+
+**Piece**:
+Anything you can practise in the app: an exercise or a song from My songs. Both play the same way.
+_Avoid_: Melody, track, tune
+
+**Exercise**:
+A short built-in piece for practising, not a real song. It can't be edited.
+_Avoid_: Melody, drill, lesson
