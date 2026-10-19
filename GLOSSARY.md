@@ -58,3 +58,17 @@ _Avoid_: Diagram, keyboard
 A drum map with the target tongue lit, shown only when you're stuck on a step. It fades for each
 tongue separately as you find that tongue without it.
 _Avoid_: Highlight, help, cue
+
+**Song text**:
+A song sheet typed out in the app's plain-text form: a title, a melody line and an optional
+accompaniment line, with note lengths written as keyboard marks. It's what you paste into the app.
+_Avoid_: Song file, tab, transcription
+
+**Conversion prompt**:
+The rules for writing song text, copied out of the app so a chatbot can turn a song sheet image
+into song text.
+_Avoid_: Ruleset, export rules
+
+**My songs**:
+The songs you've pasted into the app, saved on that device only.
+_Avoid_: Library, custom songs
