@@ -27,6 +27,7 @@ const PLAN = [
 
 const ATTEMPT_MS = 500; // every strike within this long of the first one belongs to the same attempt
 const LOCKOUT_MS = 700; // after an attempt, strikes are ignored this long (counted as extra onsets)
+const WARMUP_MS = 1500; // the detector spends about the first second learning the room's background
 
 const cents = (a, b) => Math.abs(1200 * Math.log2(DRUM_NOTES[a].freq / DRUM_NOTES[b].freq));
 const isOvertone = (lo, hi) => [2, 3].some((m) =>
@@ -69,6 +70,12 @@ class ChordProbe {
     if (t - this.open.t < ATTEMPT_MS || this.l.collecting) return null;
     const done = { ...this.open, extraOnsets: 0 };
     this.open = null;
+    // An onset with no note behind it (ring-along wobble, room noise, the first second while the
+    // detector learns the room) isn't a strike: keep waiting for the real one.
+    if (!done.events.length && !Object.keys(done.heard).length || done.t < WARMUP_MS) {
+      if (this.last) this.last.extraOnsets++;
+      return null;
+    }
     this.lockUntil = t + LOCKOUT_MS;
     this.last = done;
     return done;
@@ -100,7 +107,9 @@ function summary(results) {
     s += `${name.padEnd(26)}${String(rs.length).padStart(4)}${XS.map((x) => pct(rs.filter((r) => sameSet(readAt(r.attempt.heard, x), r.notes)).length, rs.length)).join("")}${pct(right, rs.length)}` + NL;
   }
   const extra = done.filter((r) => r.attempt.extraOnsets > 0).length;
-  s += NL + `Strikes followed by a stray onset (ring-along re-trigger) within ${LOCKOUT_MS} ms: ${extra}/${done.length}` + NL;
+  const ignored = results.reduce((a, r) => a + (r.ignored?.length || 0), 0);
+  s += NL + `Strikes followed by a stray onset (ringing, noise, or a strike while the next prompt wasn't up): ${extra}/${done.length}` + NL;
+  s += `Sounds ignored because they held none of the asked-for notes: ${ignored}` + NL;
   s += NL + "EVERY STRIKE (struck → heard, rise relative to the biggest; detector events)" + NL;
   for (const r of done) {
     const top = Math.max(0, ...Object.values(r.attempt.heard));
@@ -182,9 +191,16 @@ function showPrompt() {
 }
 
 function onAttempt(attempt) {
-  if (step >= PLAN.length) return;
-  results[step].attempt = attempt;
+  if (step >= PLAN.length || $("pair").textContent === "…") return;
   const heard = readAt(attempt.heard, 0.1);
+  // Hearing none of the asked-for notes is almost always noise or ringing, not the strike: keep waiting.
+  if (!Object.keys(attempt.heard).some((id) => PLAN[step].notes.includes(id))) {
+    (results[step].ignored ||= []).push(attempt);
+    $("heard").className = "bad";
+    $("heard").innerHTML = `ignored a sound (${heard.map(noteHtml).join(" + ") || "no note"}), still waiting`;
+    return;
+  }
+  results[step].attempt = attempt;
   const ok = sameSet(heard, PLAN[step].notes);
   $("heard").className = ok ? "ok" : "bad";
   $("heard").innerHTML = `heard ${heard.map(noteHtml).join(" + ") || "nothing"}`;
