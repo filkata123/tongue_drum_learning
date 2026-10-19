@@ -2,7 +2,7 @@
 // Mic mode:    chord-record.html                       records, shows what it heard, saves .wav + .json
 // Replay mode: chord-record.html?replay=<name>         re-runs recordings/<name>.wav against recordings/<name>.json
 import { DRUM_NOTES, parseToken } from "./notes.js";
-import { CONFIG, NoteListener } from "./pitch.js";
+import { CONFIG, NoteListener, NoteMeter } from "./pitch.js";
 
 const $ = (id) => document.getElementById(id);
 const REPLAY = new URLSearchParams(location.search).get("replay");
@@ -263,7 +263,35 @@ async function replay(name) {
   const replayed = saved.results.map((r) => ({
     ...r, attempt: r.attempt && (attempts.find((a) => Math.abs(a.t - r.attempt.t) < 100) || { t: r.attempt.t, onsets: 0, events: [], heard: {}, extraOnsets: 0 }),
   }));
-  $("summary").textContent = summary(replayed);
+  $("summary").textContent = targetCheck(replayed, samples, sr) + "\n\n" + summary(replayed);
   window.replayed = replayed;
+}
+
+// Step mode knows which two tongues to expect, so it only has to ask "are those two the loudest?".
+// Also reports how much of the recording is exact digital silence (a mic driver muting quiet input).
+function targetCheck(rs, samples, sr) {
+  const N = CONFIG.windowSize, meter = new NoteMeter(sr, N);
+  const idx = Object.fromEntries(DRUM_NOTES.map((n, k) => [n.id, k]));
+  const tally = {};
+  for (const r of rs) {
+    if (!r.attempt || r.notes.length < 2) continue;
+    const end = Math.round(((r.attempt.t + 200) / 1000) * sr);
+    const lv = meter.levels(samples.subarray(end - N, end));
+    const exp = r.notes.map((id) => idx[id]);
+    const otherMax = Math.max(...Array.from(lv).filter((_, k) => !exp.includes(k)));
+    const margin = 10 * Math.log10(Math.min(...exp.map((k) => lv[k])) / otherMax);
+    const t = (tally[`${r.kind}, ${r.cond}`] ||= { n: 0, ok: 0, margins: [] });
+    t.n++;
+    if (margin > 0) t.ok++;
+    t.margins.push(margin);
+  }
+  const zeros = samples.reduce((a, x) => a + (x === 0), 0);
+  let s = `Exact digital silence: ${Math.round((100 * zeros) / samples.length)}% of the recording` + "\n\n";
+  s += "TARGET CHECK, 200 ms after the strike: both struck tongues are the two loudest  (median margin of the softer one over the loudest other tongue)\n";
+  for (const [k, t] of Object.entries(tally)) {
+    const med = t.margins.sort((a, b) => a - b)[Math.floor(t.margins.length / 2)];
+    s += `  ${k.padEnd(26)}${`${t.ok}/${t.n}`.padStart(6)}   ${med.toFixed(0).padStart(3)} dB\n`;
+  }
+  return s;
 }
 if (REPLAY) replay(REPLAY);
