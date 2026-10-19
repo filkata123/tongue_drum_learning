@@ -51,6 +51,11 @@ A mode where notes must be hit in time with a beat. The beat keeps going whether
 a missed note is marked and the sheet moves on.
 _Avoid_: Rhythm mode
 
+**Listen**:
+The app plays the part you're practising, with each number lit as it sounds. Only ever on
+request; it never plays by itself.
+_Avoid_: Preview, demo, playback
+
 **Drum map**:
 A picture of the 15 tongues laid out as they sit on the drum in front of you.
 _Avoid_: Diagram, keyboard
