@@ -47,7 +47,8 @@ The mode that shows one note, waits as long as needed, and moves on when the rig
 _Avoid_: Free mode, practice mode
 
 **Timed mode**:
-A mode where notes must be hit in time with a beat.
+A mode where notes must be hit in time with a beat. The beat keeps going whether or not you hit;
+a missed note is marked and the sheet moves on.
 _Avoid_: Rhythm mode
 
 **Drum map**:
