@@ -8,15 +8,14 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  start: $("start"), startBtn: $("start-btn"), startError: $("start-error"),
-  play: $("play"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
+  startHint: $("start-hint"), startError: $("start-error"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), piecesProgress: $("pieces-progress"), addSong: $("add-song"),
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
-  gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
+  gearBtn: $("play-gear"), gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
   listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
   listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
   timedSwitch: $("timed-switch"),
@@ -214,21 +213,35 @@ els.copyPrompt.addEventListener("click", async () => {
     els.copyPrompt.textContent = "Couldn't copy";
   }
 });
-els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send({ type: "open", what: "gear" }))));
+els.gearBtn.addEventListener("click", () => render(core.send({ type: "open", what: "gear" })));
 els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.tempoSlower.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: -1 })));
 els.tempoFaster.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: 1 })));
-els.tempoAuto.addEventListener("click", () => render(core.send({ type: "setTempoAuto" })));
-els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
+els.tempoAuto.addEventListener("click", () => render(core.send({ type: "tempoAuto" })));
+els.restartBtn.addEventListener("click", async () => {
+  // The first Start asks for the microphone; the run starts only once it's open.
+  if (!(await openMic())) return;
+  render(core.send({ type: "start" }));
+});
 els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
-els.listenBtn.addEventListener("click", () => render(core.send({ type: "listen" })));
+els.listenBtn.addEventListener("click", () => {
+  openAudio(); // Listen needs sound out, not the mic
+  render(core.send({ type: "listen" }));
+});
 els.listenSlower.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: -1 })));
 els.listenFaster.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: 1 })));
 
 // --- Audio ---------------------------------------------------------------
 
-let audio = null; // the AudioContext, once Start has opened it
+let audio = null; // the AudioContext, once Listen or Start has opened it
+
+// Opens (or wakes) the AudioContext. Called from a tap, so the browser lets it make sound.
+function openAudio() {
+  audio ??= new AudioContext();
+  audio.resume();
+  return audio;
+}
 
 // A drum-like voice: a soft-mallet attack and a ringing tone whose overtones die away first,
 // fading out over about the note's length. Returns its parts so it can be cancelled.
@@ -302,8 +315,9 @@ async function openInput(ctx) {
 }
 
 // Feeds the detector a frame every `hop` samples (~60 per second) of continuous audio.
-// Timing comes from the sample count, so a busy or slow device doesn't skip audio.
-async function listen(ctx, input) {
+// Timing comes from the sample count, so a busy or slow device doesn't skip audio. Returns what
+// the frame loop calls to show the level meter (and, with ?debug, what the detector hears).
+async function startDetector(ctx, input) {
   await ctx.audioWorklet.addModule("capture.js");
   const capture = new AudioWorkletNode(ctx, "capture");
   input.connect(capture);
@@ -345,9 +359,7 @@ async function listen(ctx, input) {
   };
 
   const bars = DEBUG ? buildNoteBars() : null;
-  function tick() {
-    requestAnimationFrame(tick);
-    render(core.send({ type: "tick" }));
+  return function showReading() {
     if (!listener.reading) return;
     const { level, notes, floors, heard } = listener.reading;
     els.levelBar.style.width = `${dbPercent(20 * Math.log10(level), -70, -10)}%`;
@@ -359,8 +371,7 @@ async function listen(ctx, input) {
         bars[k].bar.classList.toggle("above", p >= floors[k]);
       });
     }
-  }
-  tick();
+  };
 }
 
 // Maps a dB value onto 0–100% between lo and hi.
@@ -424,24 +435,37 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") keepAwake(shown?.playing);
 });
 
-els.startBtn.addEventListener("click", async () => {
-  els.startError.hidden = true;
-  try {
-    const ctx = new AudioContext();
-    await ctx.resume();
-    const input = await openInput(ctx);
-    await listen(ctx, input);
-    audio = ctx;
-  } catch (err) {
-    els.startError.textContent = window.isSecureContext
-      ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`
-      : "The microphone only works over https:// or on localhost.";
-    els.startError.hidden = false;
-    return;
-  }
-  els.start.hidden = true;
-  els.play.hidden = false;
-  els.debug.hidden = !DEBUG;
-  els.simHint.hidden = !SIM;
-  render(core.send({ type: "start" }));
-});
+// The mic (or, with ?sim, the keyboard drum), opened by the first Start. Resolves true once it's
+// listening; on failure it says why and the next Start asks again.
+let micOpen = null;
+function openMic() {
+  micOpen ??= (async () => {
+    els.startError.hidden = true;
+    try {
+      const ctx = openAudio();
+      await ctx.resume();
+      showReading = await startDetector(ctx, await openInput(ctx));
+    } catch (err) {
+      els.startError.textContent = window.isSecureContext
+        ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`
+        : "The microphone only works over https:// or on localhost.";
+      els.startError.hidden = false;
+      micOpen = null;
+      return false;
+    }
+    els.startHint.hidden = true;
+    els.debug.hidden = !DEBUG;
+    els.simHint.hidden = !SIM;
+    return true;
+  })();
+  return micOpen;
+}
+
+// The screen keeps up with the core every frame, mic or not: Listen, the hint's wait and the
+// finished run's "done" all run on the core's clock.
+let showReading = null; // the level meter, once the mic is open
+(function frame() {
+  requestAnimationFrame(frame);
+  render(core.send({ type: "tick" }));
+  showReading?.();
+})();
