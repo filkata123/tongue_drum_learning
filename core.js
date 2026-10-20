@@ -3,6 +3,7 @@
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
 import { EXERCISES, halfOf } from "./notes.js";
 import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
+import { MADE_UP_TUNES, makeUpTune } from "./tunes.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
 const DONE_MS = 1500;      // "done" shows this long before the piece starts again
@@ -12,6 +13,9 @@ const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's 
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
+// The made-up tunes come after them. Listed, a made-up tune is only its row; the tune itself is
+// made up fresh whenever it's picked or finished (see `practise`).
+const ALL_EXERCISES = [...EXERCISE_PIECES, ...MADE_UP_TUNES.map((t) => ({ ...t, group: "exercise" }))];
 
 // Step mode's tongues, one per step. Until two-line Step mode lands, a two-line piece plays its
 // melody line.
@@ -43,8 +47,12 @@ function loadFade(storage) {
 
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
-  const pieces = () => [...EXERCISE_PIECES, ...songs];
+  const pieces = () => [...ALL_EXERCISES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
+  // The piece to practise for a listed one: a made-up tune is made up now, anything else is as is.
+  const practise = (piece) => piece?.row
+    ? { ...piece, ...parseSongText(`title: ${piece.title}\nmelody: ${makeUpTune(piece.row, random).join(" ")}`) }
+    : piece;
   const fade = loadFade(storage);
   const target = () => stepTongues(state.piece)[state.position]; // the current step's tongue
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
@@ -64,7 +72,7 @@ export function createPracticeCore({ storage, clock, random }) {
 
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
-    piece: findPiece(storage.getItem(PIECE_KEY)) ?? EXERCISE_PIECES[0],
+    piece: practise(findPiece(storage.getItem(PIECE_KEY))) ?? EXERCISE_PIECES[0],
     playing: false,
     position: 0,
     heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
@@ -81,13 +89,13 @@ export function createPracticeCore({ storage, clock, random }) {
 
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
-    const entry = (p) => ({ id: p.id, title: p.title, current: p === state.piece, editable: p.group === "my-song", mark: null, tempo: null });
+    const entry = (p) => ({ id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: null, tempo: null });
     return {
       kind: "pieces",
       found: "",
       averages: [],
       groups: [
-        { title: "Exercises", pieces: EXERCISE_PIECES.map(entry) },
+        { title: "Exercises", pieces: ALL_EXERCISES.map(entry) },
         { title: "My songs", pieces: songs.map(entry) },
       ],
     };
@@ -169,8 +177,12 @@ export function createPracticeCore({ storage, clock, random }) {
     }
     state.done = true;
     state.doneSeq++;
-    // A finished piece starts again; the app never moves on to another piece by itself.
-    schedule(DONE_MS, at, toFirstStep);
+    // A finished piece starts again; the app never moves on to another piece by itself. A finished
+    // made-up tune makes way for a new one.
+    schedule(DONE_MS, at, (from) => {
+      state.piece = practise(findPiece(state.piece.id));
+      toFirstStep(from);
+    });
   }
 
   function toFirstStep(at = clock()) {
@@ -242,7 +254,7 @@ export function createPracticeCore({ storage, clock, random }) {
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
       if (!piece) throw new Error(`Unknown piece: ${pieceId}`);
-      state.piece = piece;
+      state.piece = practise(piece);
       storage.setItem(PIECE_KEY, piece.id);
       state.overlay = null;
       // Picking abandons any run: the learner is the one who presses Start.

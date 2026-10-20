@@ -13,7 +13,7 @@
     const bust = `?v=${Date.now()}`;
     const { createPracticeCore } = await import(`./core.js${bust}`);
     const { parseSongText } = await import(`./songtext.js${bust}`);
-    const { EXERCISES, NOTE_BY_ID } = await import(`./notes.js${bust}`);
+    const { EXERCISES, NOTE_BY_ID, DRUM_NOTES } = await import(`./notes.js${bust}`);
 
     const out = document.getElementById("out");
     const results = [];
@@ -707,6 +707,104 @@
       const { t, core } = playSong(HINT_SONG, fakeStorage({ "tongue-drum:fade": "{oops" }));
       t.now += 5000;
       check("corrupt fade counts mean no tongue has faded", core.send({ type: "tick" }).hint?.lit, ["1"]);
+    }
+
+    // Made-up tunes.
+    const MADE_UP = { "made-up-middle": ["1", "2", "3", "4", "5", "6", "7"], "made-up-whole": DRUM_NOTES.map((n) => n.id) };
+    const tuneOf = (v) => v.steps.map((s) => s.tongues[0].id);
+    function seededCore(seed, storage = fakeStorage()) {
+      const t = { now: new Date(2026, 9, 20, 9).getTime() };
+      return { t, core: createPracticeCore({ storage, clock: () => t.now, random: seeded(seed) }) };
+    }
+
+    {
+      const { core } = setup();
+      const exercises = core.send({ type: "open", what: "pieces" }).overlay.groups[0].pieces;
+      check("both made-up tunes are listed under Exercises",
+        exercises.filter((p) => p.id in MADE_UP).map((p) => p.title), ["Made-up tune: middle row", "Made-up tune: whole drum"]);
+      check("neither made-up tune is first in the list", exercises[0].id in MADE_UP, false);
+      check("made-up tunes are read-only", exercises.filter((p) => p.id in MADE_UP).some((p) => p.editable), false);
+    }
+
+    // Every shaping rule from #15, over many seeds, for both made-up tunes.
+    for (const [pieceId, row] of Object.entries(MADE_UP)) {
+      const broken = { length: [], tongues: [], start: [], end: [], answer: [], question: [], jump: [], repeats: [], part: [] };
+      const at = (tongue) => row.indexOf(tongue); // the tongue's place on this row, low to high
+      const halfDrum = Math.floor(row.length / 2);
+      const tunes = new Set();
+      let moves = 0, small = 0, big = 0;
+      for (let seed = 1; seed <= 300; seed++) {
+        const v = seededCore(seed).core.send({ type: "pick", pieceId });
+        const tune = tuneOf(v);
+        const name = `${seed}: ${tune.join(" ")}`;
+        tunes.add(tune.join(" "));
+        if (tune.length !== 8 || v.steps.some((s) => s.tongues.length !== 1)) broken.length.push(name);
+        if (tune.some((tg) => at(tg) < 0)) { broken.tongues.push(name); continue; }
+        if (!["1", "3", "5"].includes(tune[0])) broken.start.push(name);
+        if (tune[7] !== "1") broken.end.push(name);
+        if (tune[4] !== tune[0] || tune[5] !== tune[1]) broken.answer.push(name);
+        if (tune[3] === "1") broken.question.push(name);
+        if (v.piece.part !== null) broken.part.push(name);
+        for (let i = 1; i < tune.length; i++) {
+          const move = Math.abs(at(tune[i]) - at(tune[i - 1]));
+          moves++;
+          if (move <= 2) small++;
+          else big++;
+          if (move > halfDrum) broken.jump.push(name);
+          if (i >= 2 && tune[i] === tune[i - 1] && tune[i] === tune[i - 2]) broken.repeats.push(name);
+        }
+      }
+      check(`${pieceId}: always 8 one-tongue steps, melody line only`, [broken.length, broken.part], [[], []]);
+      check(`${pieceId}: only tongues from its row`, broken.tongues, []);
+      check(`${pieceId}: starts on 1, 3 or 5`, broken.start, []);
+      check(`${pieceId}: ends on 1`, broken.end, []);
+      check(`${pieceId}: the answer phrase starts like the question`, broken.answer, []);
+      check(`${pieceId}: the question doesn't end on 1`, broken.question, []);
+      check(`${pieceId}: never a jump of more than half the row`, broken.jump, []);
+      check(`${pieceId}: never more than two of the same tongue in a row`, broken.repeats, []);
+      check(`${pieceId}: mostly small moves (≥ 75% one or two places)`, small / moves >= 0.75, true);
+      check(`${pieceId}: a bigger jump now and then`, big > 0, true);
+      check(`${pieceId}: different seeds make different tunes`, tunes.size >= 100, true);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = seededCore(7, storage);
+      const first = tuneOf(core.send({ type: "pick", pieceId: "made-up-whole" }));
+      let v = core.send({ type: "start" });
+      check("Start plays the tune that's showing", tuneOf(v), first);
+      core.send({ type: "strike", tongue: v.steps[0].tongues[0].id, at: t.now });
+      t.now += 300;
+      v = core.send({ type: "start" });
+      check("Restart replays the same tune from step 1", [tuneOf(v), v.position], [first, 0]);
+      v = playThrough(t, core);
+      check("a made-up tune finishes like any piece", [v.done.title, tuneOf(v)], ["Made-up tune: whole drum", first]);
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      const second = tuneOf(v);
+      check("finishing a made-up tune makes a new one, from step 1, still playing",
+        [v.piece.id, second.join(" ") !== first.join(" "), second.length, v.position, v.playing, v.done],
+        ["made-up-whole", true, 8, 0, true, null]);
+      v = core.send({ type: "open", what: "pieces" });
+      check("the made-up tune is marked current in the list",
+        v.overlay.groups[0].pieces.filter((p) => p.current).map((p) => p.id), ["made-up-whole"]);
+      v = core.send({ type: "pick", pieceId: "made-up-whole" });
+      check("picking the made-up tune again makes a new one", tuneOf(v).join(" ") !== second.join(" "), true);
+      v = seededCore(8, storage).core.send({ type: "tick" });
+      check("a picked made-up tune persists as the exercise, with a tune made up for the fresh core",
+        [v.piece.id, tuneOf(v).length, tuneOf(v)[7]], ["made-up-whole", 8, "1"]);
+    }
+
+    {
+      const { t, core } = seededCore(3);
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      const v = core.send({ type: "start" });
+      const target = v.steps[0].tongues[0].id;
+      const wrong = target === "3" ? "5" : "3";
+      core.send({ type: "strike", tongue: wrong, at: t.now });
+      const hint = core.send({ type: "strike", tongue: wrong, at: t.now }).hint;
+      check("the Location hint appears on a made-up tune step as on any piece",
+        [hint?.half, hint?.lit], [{ 1: "right", 3: "right", 5: "left" }[target], [target]]); // a tune starts on 1, 3 or 5
     }
 
     const failed = results.filter((r) => !r.ok).length;
