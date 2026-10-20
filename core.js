@@ -1,21 +1,22 @@
 // The practice core: every Step mode rule, with no DOM, mic or audio output.
 // The screen turns DOM events and detector strikes into commands and renders the view that
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
-import { MELODIES } from "./notes.js";
+import { EXERCISES } from "./notes.js";
+import { parseSongText } from "./songtext.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
-const DONE_MS = 1500;      // "done" shows this long before the next exercise starts
-const PIECE_KEY = "tongue-drum:melody";
+const DONE_MS = 1500;      // "done" shows this long before the piece starts again
 
-// The exercise to pick up at; anything but a whole number in range means the first one.
-function storedPieceIdx(storage) {
-  const idx = Number(storage.getItem(PIECE_KEY));
-  return Number.isInteger(idx) && idx >= 0 && idx < MELODIES.length ? idx : 0;
-}
+// Every exercise goes through the same parser as a pasted song.
+const PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
+
+// Step mode's tongues, one per step. Until two-line Step mode lands, a two-line piece plays its
+// melody line.
+const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
 
 export function createPracticeCore({ storage, clock, random }) {
   const state = {
-    pieceIdx: storedPieceIdx(storage),
+    piece: PIECES[0],
     playing: false,
     position: 0,
     heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
@@ -26,20 +27,18 @@ export function createPracticeCore({ storage, clock, random }) {
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
   };
 
-  const currentPiece = () => MELODIES[state.pieceIdx];
-
   function view() {
-    const piece = currentPiece();
+    const { piece } = state;
     return {
-      piece: { id: piece.id, title: piece.name, group: "exercise", part: null },
+      piece: { id: piece.id, title: piece.title, group: piece.group, part: null },
       playing: state.playing,
-      steps: piece.notes.map((id, i) => ({
+      steps: stepTongues(piece).map((id, i) => ({
         tongues: [{ id, heard: i < state.position || (i === state.position && state.heard) }],
         missed: false,
       })),
       position: state.position,
       feedback: state.feedback,
-      done: state.done ? { title: piece.name, seq: state.doneSeq } : null,
+      done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
     };
   }
 
@@ -58,21 +57,15 @@ export function createPracticeCore({ storage, clock, random }) {
   }
 
   function moveOn(at) {
-    if (state.position + 1 < currentPiece().notes.length) {
+    if (state.position + 1 < stepTongues(state.piece).length) {
       state.position++;
       state.heard = false;
       return;
     }
     state.done = true;
     state.doneSeq++;
-    schedule(DONE_MS, at, nextPiece);
-  }
-
-  // Today's Step mode moves straight on to the next exercise (#24 replaces this with a picker).
-  function nextPiece() {
-    state.pieceIdx = (state.pieceIdx + 1) % MELODIES.length;
-    storage.setItem(PIECE_KEY, String(state.pieceIdx));
-    toFirstStep();
+    // A finished piece starts again; the app never moves on to another piece by itself.
+    schedule(DONE_MS, at, toFirstStep);
   }
 
   function toFirstStep() {
@@ -91,7 +84,7 @@ export function createPracticeCore({ storage, clock, random }) {
     },
     strike({ tongue }) {
       if (!state.playing || state.heard || state.done) return;
-      const target = currentPiece().notes[state.position];
+      const target = stepTongues(state.piece)[state.position];
       if (tongue === target) {
         state.heard = true;
         state.feedback = null;
