@@ -128,6 +128,10 @@ header {
 }
 #current .note.heard { color: #22c55e; }
 #stage.miss #current { color: #f87171; animation: shake 0.3s; }
+/* Timed mode: a note missed in time turns red; the box pulses on every beat. */
+.step .note.missed { color: #f87171; }
+#current.beat { animation: beat 0.3s ease-out; }
+#feedback.count-in { color: #9ca3af; }
 
 #next { display: flex; align-items: center; gap: 0.07em; color: #6b7280; }
 #next .step:nth-child(1) { font-size: 0.42em; }
@@ -169,7 +173,12 @@ footer {
   max-width: 32rem;
   margin: 0 auto 0.75rem;
 }
-#timed { width: 5.5rem; height: 2.5rem; }
+#timed {
+  width: 5.5rem; height: 2.5rem;
+  display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+  color: #9ca3af; font-size: 1rem; cursor: pointer;
+}
+#timed input { width: 1.2rem; height: 1.2rem; margin: 0; accent-color: #9ca3af; }
 #restart-btn {
   font: inherit;
   font-size: 1.4rem;
@@ -356,6 +365,11 @@ footer {
 }
 #gear .switch input { width: 1.4rem; height: 1.4rem; accent-color: #9ca3af; }
 #gear .hint { margin: 0; text-align: left; padding: 0; }
+
+@keyframes beat {
+  from { box-shadow: 0 0 0 0.06em #9ca3af; }
+  to { box-shadow: 0 0 0 0.06em transparent; }
+}
 
 @keyframes shake {
   0%, 100% { transform: translateX(0); }

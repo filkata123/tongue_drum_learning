@@ -1,4 +1,4 @@
-// The practice core: every Step mode rule, with no DOM, mic or audio output.
+// The practice core: every Step mode and Timed mode rule, with no DOM, mic or audio output.
 // The screen turns DOM events and detector strikes into commands and renders the view that
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
 import { EXERCISES, halfOf } from "./notes.js";
@@ -12,6 +12,9 @@ const HINT_IDLE_MS = 5000; // …or after this long with no strike, whichever co
 const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's hint retires
 const CHORD_MS = 100;      // a chord's tongues must each start sounding this close to the strike
 const RING_ON_MS = 1500;   // the step just played may still ring this long after it was hit
+const COUNT_IN = 4;        // a Timed run counts in with this many clicks, a beat apart
+const DEFAULT_TEMPO = 60;  // beats a minute for a Timed run
+const LATE_MS = 300;       // a strike can reach the core this long after its onset and still count
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
@@ -33,6 +36,7 @@ const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order
 const FADE_KEY = "tongue-drum:fade";   // unaided hits in a row, per tongue: { [tongue]: count }
 const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line pieces past their first part
 const HINTS_KEY = "tongue-drum:hints"; // the gear's "Location hints" switch: true | false
+const TIMED_KEY = "tongue-drum:timed"; // the "Timed" switch beside Start: true | false
 // Cold-run scores: { [pieceId]: { [part]: { [day]: [hits, steps] } } }; a one-line piece's go under "melody"
 const SCORES_KEY = "tongue-drum:scores";
 
@@ -67,6 +71,11 @@ function loadHints(storage) {
   try { return JSON.parse(storage.getItem(HINTS_KEY)) !== false; } catch { return true; }
 }
 
+// The "Timed" switch as saved. Anything but a saved true means off.
+function loadTimed(storage) {
+  try { return JSON.parse(storage.getItem(TIMED_KEY)) === true; } catch { return false; }
+}
+
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...ALL_EXERCISES, ...songs];
@@ -75,8 +84,11 @@ export function createPracticeCore({ storage, clock, random }) {
   const practise = (piece) => piece?.row
     ? { ...piece, ...parseSongText(`title: ${piece.title}\nmelody: ${makeUpTune(piece.row, random).join(" ")}`) }
     : piece;
+  // The tempo a piece's Timed run goes at. #39 gives each piece its own, rising after good runs.
+  const tempoOf = () => DEFAULT_TEMPO;
   const fade = loadObject(storage, FADE_KEY); // no saved counts means no tongue has faded yet
   let hintsOn = loadHints(storage);
+  let timedOn = loadTimed(storage); // Start begins a Timed run rather than Step mode
   const targets = () => steps()[state.position]; // the current step's tongues
   // The current step's tongues not heard yet: all of them, or the other half of a chord.
   const missing = () => targets().filter((t) => t !== state.partial);
@@ -149,6 +161,10 @@ export function createPracticeCore({ storage, clock, random }) {
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
     overlay: null, // null | "pieces" | "gear" | "editor"
     editor: null, // { pieceId, text, errors } while the paste box is open; pieceId null = a new song
+    timed: null, // the Timed run under way (see startTimed), or null in Step mode
+    beatSeq: 0, // goes up on every beat of a Timed run, so the pulse restarts
+    sound: null, // { key, events }: what the screen should play; a new key replaces what was scheduled
+    soundSeq: 0,
   };
   state.part = partOf(state.piece);
   const steps = () => stepsOf(state.piece, state.part);
@@ -186,23 +202,27 @@ export function createPracticeCore({ storage, clock, random }) {
     storage.setItem(FADE_KEY, JSON.stringify(fade));
   }
 
+  // In Step mode every step before the current one was heard. In a Timed run each note is heard,
+  // red or still to come, whatever the position.
+  const heardStep = (i, id) => (state.timed ? state.timed.marks[i] === "heard"
+    : i < state.position || (i === state.position && (state.heard || state.partial === id)));
+
   function view() {
     const { piece } = state;
     return {
       piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part },
       playing: state.playing,
       steps: steps().map((tongues, i) => ({
-        tongues: tongues.map((id) => ({
-          id,
-          heard: i < state.position || (i === state.position && (state.heard || state.partial === id)),
-        })),
-        missed: false,
+        tongues: tongues.map((id) => ({ id, heard: heardStep(i, id) })),
+        missed: state.timed?.marks[i] === "red",
       })),
       position: state.position,
       feedback: state.feedback,
       hint: state.hint ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       result: state.result,
+      timed: { on: timedOn, countIn: state.timed?.countIn ?? null, beatSeq: state.beatSeq },
+      sound: state.sound,
       overlay: state.overlay === "pieces" ? piecesOverlay()
         : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: null }
         : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
@@ -274,6 +294,87 @@ export function createPracticeCore({ storage, clock, random }) {
     newStep(at);
     state.feedback = null;
     state.done = false;
+    state.timed = null;
+    state.sound = null;
+  }
+
+  // A Timed run: the melody line against a beat that doesn't wait. It counts in with clicks, then
+  // only the pulse keeps time, so the mic never hears a click while you play. Each note is due at
+  // its song-text start, after the count-in.
+  function startTimed(at) {
+    state.part = partsOf(state.piece)[0]; // the melody line only; the piece's own part is untouched
+    const { melody } = state.piece.lines;
+    const beat = 60000 / tempoOf(state.piece);
+    const due = melody.map((n) => at + (COUNT_IN + n.start) * beat);
+    const window = beat / 2; // a note counts if hit this close to when it's due, either side
+    // A note not hit by the end of its window turns red once a strike can no longer be on its way.
+    const verdict = (i) => due[i] + window + LATE_MS;
+    const end = verdict(due.length - 1); // the run ends with the last note's verdict, the pulse too
+    // Everything the run does by the clock, in order, run off the one pending timer.
+    const events = [];
+    const clicks = [];
+    for (let b = 0; at + b * beat < end; b++) {
+      if (b < COUNT_IN) clicks.push({ at: at + b * beat, kind: "click" });
+      events.push({ at: at + b * beat, run: () => {
+        state.beatSeq++;
+        state.timed.countIn = b < COUNT_IN ? b + 1 : null;
+      } });
+    }
+    due.forEach((d, i) => {
+      // The sheet moves on halfway to the next note, whether this one was hit or not.
+      if (i + 1 < due.length) events.push({ at: (d + due[i + 1]) / 2, run: () => { state.position = i + 1; } });
+      events.push({ at: verdict(i), run: () => { state.timed.marks[i] ??= "red"; } });
+    });
+    events.push({ at: end, run: finishTimed }); // sorts after the last verdict, at the same time
+    events.sort((a, b) => a.at - b.at);
+    state.timed = { countIn: null, events, due, window, marks: due.map(() => null) };
+    state.sound = { key: ++state.soundSeq, events: clicks };
+    nextTimedEvent(0);
+    catchUp(at); // the first click is now
+  }
+
+  // A strike in a Timed run goes to the note still to come whose window it falls in (the nearest,
+  // where windows overlap). The right tongue is heard; anything else turns the note red.
+  function timedStrike({ tongue, at }) {
+    const { due, window, marks } = state.timed;
+    const open = due.map((d, i) => i).filter((i) => !marks[i] && Math.abs(at - due[i]) <= window);
+    if (!open.length) return;
+    const nearest = (list) => list.reduce((a, b) => (Math.abs(at - due[b]) < Math.abs(at - due[a]) ? b : a));
+    const right = open.filter((i) => steps()[i][0] === tongue);
+    if (right.length) {
+      marks[nearest(right)] = "heard";
+      state.firstStrikeHits++;
+      return;
+    }
+    const i = nearest(open);
+    // The note before, struck late or still ringing, isn't a wrong strike on this one.
+    if (steps()[i - 1]?.[0] === tongue) return;
+    marks[i] = "red";
+  }
+
+  // A Timed run is one pass. Its first-strike hits are scored like any run's (melody line), and its
+  // line says how many notes were on time and which tongues were missed. Then it waits for Start.
+  function finishTimed(at) {
+    const notes = steps();
+    const red = state.timed.marks.flatMap((m, i) => (m === "red" ? notes[i] : []));
+    state.done = true;
+    state.doneSeq++;
+    scoreRun(at);
+    state.result = { score: `${state.firstStrikeHits}/${notes.length} on time`, missed: [...new Set(red)], tempo: null };
+    schedule(DONE_MS, at, (from) => {
+      state.playing = false;
+      toFirstStep(from);
+    });
+  }
+
+  // Sets the timer for the run's k-th event, which then sets the one after it.
+  function nextTimedEvent(k) {
+    const e = state.timed.events[k];
+    if (!e) return;
+    schedule(0, e.at, (from) => {
+      e.run(from);
+      if (state.timed) nextTimedEvent(k + 1);
+    });
   }
 
   // What a strike does to the current step: "hit", "partial" (one tongue of a chord), "miss" or
@@ -298,13 +399,20 @@ export function createPracticeCore({ storage, clock, random }) {
     tick() {},
     start() {
       state.playing = true;
-      toFirstStep();
+      const at = clock();
+      toFirstStep(at);
+      if (timedOn) startTimed(at);
     },
     open({ what, pieceId }) {
       if (what !== "pieces" && what !== "gear" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
       // Editing a song reopens its saved text; without a pieceId the paste box is for a new song.
       const song = what === "editor" && pieceId != null ? findSong(pieceId) : null;
       state.overlay = what;
+      // The beat wouldn't wait while the overlay is open, so a Timed run stops, waiting for Start.
+      if (state.timed) {
+        state.playing = false;
+        toFirstStep();
+      }
       if (what === "editor") state.editor = { pieceId: song?.id ?? null, text: song?.text ?? "", errors: [] };
     },
     saveSong({ text }) {
@@ -361,6 +469,11 @@ export function createPracticeCore({ storage, clock, random }) {
       // Switching on takes effect from the next miss or wait, not on the spot.
       if (!hintsOn) state.hint = false;
     },
+    setTimed({ on }) {
+      // Takes effect from the next Start; a run under way carries on as it began.
+      timedOn = Boolean(on);
+      storage.setItem(TIMED_KEY, JSON.stringify(timedOn));
+    },
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
       if (!piece) throw new Error(`Unknown piece: ${pieceId}`);
@@ -376,6 +489,11 @@ export function createPracticeCore({ storage, clock, random }) {
     strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
       state.result = null; // the last run's line goes once the next one is under way
+      // A Timed run never shows a hint and never counts towards the fade.
+      if (state.timed) {
+        timedStrike({ tongue, at });
+        return;
+      }
       const verdict = judge(targets(), { tongue, at, ranked });
       if (verdict === "ignore") return;
       if (verdict === "hit") {

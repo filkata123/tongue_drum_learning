@@ -1286,6 +1286,199 @@
       check("corrupt saved scores mean no scores, not a crash", runWithMisses(t, core, 0).result?.score, "First run today: 4/4");
     }
 
+    // Timed mode.
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      check("the Timed switch is off by default", core.send({ type: "tick" }).timed.on, false);
+      check("the Timed switch turns on", core.send({ type: "setTimed", on: true }).timed.on, true);
+      check("the Timed switch survives a fresh core on the same storage", setup(storage).core.send({ type: "tick" }).timed.on, true);
+      core.send({ type: "setTimed", on: false });
+      check("…and so does switching it off", setup(storage).core.send({ type: "tick" }).timed.on, false);
+      check("a corrupt saved switch means off",
+        setup(fakeStorage({ "tongue-drum:timed": "{oops" })).core.send({ type: "tick" }).timed.on, false);
+    }
+
+    // A Timed run of `text` at the default 60 beats a minute: a beat is 1 s, and the 4 count-in
+    // clicks put the first note 4 s after Start. `due(b)` is the clock time of song beat b.
+    const BEAT = 1000;
+    function timedRun(text = SHORT, storage = fakeStorage()) {
+      const s = setup(storage);
+      pickNewSong(s.core, text);
+      s.core.send({ type: "setTimed", on: true });
+      const t0 = s.t.now;
+      const v = s.core.send({ type: "start" });
+      return { ...s, v, t0, due: (b) => t0 + (4 + b) * BEAT };
+    }
+    // Moves the clock to `ms` and catches the core up.
+    const tickAt = ({ t, core }, ms) => { t.now = ms; return core.send({ type: "tick" }); };
+    const strikeAt = ({ t, core }, tongue, at) => { t.now = Math.max(t.now, at); return core.send({ type: "strike", tongue, at }); };
+
+    {
+      const run = timedRun();
+      const { v, t0 } = run;
+      check("Timed Start plays from the first note", [v.playing, v.position, v.steps.map(ids).join(" ")], [true, 0, "1 2 3 5"]);
+      check("Timed Start schedules 4 count-in clicks, a beat apart",
+        v.sound?.events, [0, 1, 2, 3].map((b) => ({ at: t0 + b * BEAT, kind: "click" })));
+      check("the count-in starts at 1", v.timed.countIn, 1);
+      let w = tickAt(run, t0 + 999);
+      check("…and stays there until the next beat", [w.timed.countIn, w.timed.beatSeq], [1, v.timed.beatSeq]);
+      w = tickAt(run, t0 + 3 * BEAT);
+      check("each beat of the count-in counts on and pulses", [w.timed.countIn, w.timed.beatSeq], [4, v.timed.beatSeq + 3]);
+      w = tickAt(run, run.due(0));
+      check("after the count-in only the pulse goes on", [w.timed.countIn, w.timed.beatSeq], [null, v.timed.beatSeq + 4]);
+      const again = run.core.send({ type: "start" });
+      check("Restart counts in again, replacing the clicks", [again.sound.key !== v.sound.key, again.timed.countIn], [true, 1]);
+    }
+
+    // SHORT is 1 2 3 5, one beat each. `mark` is how each note shows: heard, red or neither.
+    const mark = (v) => v.steps.map((s) => (s.tongues[0].heard ? "heard" : s.missed ? "red" : "-")).join(" ");
+
+    {
+      const run = timedRun();
+      let v = strikeAt(run, "1", run.due(0) - 400);
+      check("a hit within half a beat early counts", mark(v), "heard - - -");
+      v = strikeAt(run, "2", run.due(1) + 400);
+      check("a hit within half a beat late counts", mark(v), "heard heard - -");
+    }
+
+    {
+      const run = timedRun();
+      let v = tickAt(run, run.due(0));
+      check("the first note is current when it's due", v.position, 0);
+      v = strikeAt(run, "1", run.due(0) + 600);
+      check("a hit more than half a beat late isn't heard", mark(v), "- - - -");
+      v = tickAt(run, run.due(1) - 500);
+      check("the sheet moves on halfway to the next note, hit or not", v.position, 1);
+      v = tickAt(run, run.due(1));
+      check("an unhit note turns red once its window has passed", mark(v), "red - - -");
+    }
+
+    {
+      const run = timedRun();
+      strikeAt(run, "1", run.due(0));
+      let v = strikeAt(run, "2", run.due(1) - 600);
+      check("a hit more than half a beat early isn't heard", mark(v), "heard - - -");
+      v = tickAt(run, run.due(2));
+      check("…and the note turns red when its time has passed", [mark(v), v.position], ["heard red - -", 2]);
+    }
+
+    {
+      const run = timedRun();
+      let v = strikeAt(run, "7", run.due(0));
+      check("a wrong tongue turns the note red at once", mark(v), "red - - -");
+      v = strikeAt(run, "1", run.due(0) + 100);
+      check("…with no second try", mark(v), "red - - -");
+      v = strikeAt(run, "2", run.due(1));
+      check("…and the run keeps going", [mark(v), v.position], ["red heard - -", 1]);
+      v = strikeAt(run, "2", run.due(2) - 400);
+      check("the note just played, struck again late, doesn't count against the next", mark(v), "red heard - -");
+    }
+
+    {
+      const run = timedRun();
+      tickAt(run, run.due(0) + 750);
+      const v = run.core.send({ type: "strike", tongue: "1", at: run.due(0) + 450 });
+      check("a strike reaching the core late still counts by its onset", mark(v), "heard - - -");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      cleanRun(t, core); // the duet is on to its accompaniment part in Step mode
+      core.send({ type: "setTimed", on: true });
+      const t0 = t.now;
+      const run = { t, core, v: core.send({ type: "start" }), due: (b) => t0 + (4 + b) * BEAT };
+      check("a two-line piece runs its melody line only in Timed mode",
+        [run.v.piece.part, run.v.steps.map(ids).join(" ")], ["melody", "3 5 6"]);
+      strikeAt(run, "3", run.due(0));
+      strikeAt(run, "1", run.due(1)); // the accompaniment's note, not the melody's
+      const v = tickAt(run, run.due(3));
+      check("…against the melody's notes", mark(v), "heard red red");
+      run.core.send({ type: "setTimed", on: false });
+      check("…and Step mode is still on the accompaniment afterwards",
+        run.core.send({ type: "start" }).piece.part, "accomp");
+    }
+
+    {
+      const storage = fakeStorage();
+      const run = timedRun(HINT_SONG, storage);
+      const seen = [];
+      for (let b = 0; b < 8; b++) {
+        seen.push(strikeAt(run, "3", run.due(b)).hint); // every note wrong
+        seen.push(tickAt(run, run.due(b) + 900).hint);
+      }
+      check("no hint ever appears in Timed mode, however many misses", seen.filter(Boolean), []);
+      check("Timed misses don't change the fade counts", storage.getItem("tongue-drum:fade"), null);
+      const again = timedRun(HINT_SONG, storage);
+      for (let b = 0; b < 8; b++) strikeAt(again, b % 2 ? "7" : "1", again.due(b));
+      tickAt(again, again.due(20));
+      check("Timed hits don't change the fade counts", storage.getItem("tongue-drum:fade"), null);
+      const idle = timedRun(HINT_SONG, storage);
+      check("a long wait in Timed mode shows no hint either", tickAt(idle, idle.due(0) + 6000).hint, null);
+    }
+
+    {
+      // Held, halved and rested: the notes are due at beats 0, 2, 2.5 and 4.
+      const run = timedRun("title: Lengths\nmelody: 1 - 2/ 3/ 0 5");
+      for (const [tongue, b] of [["1", 0], ["2", 2], ["3", 2.5], ["5", 4]]) strikeAt(run, tongue, run.due(b) + 200);
+      check("note times follow the song-text lengths", mark(tickAt(run, run.due(5))), "heard heard heard heard");
+    }
+
+    {
+      const storage = fakeStorage();
+      const run = timedRun(SHORT, storage);
+      strikeAt(run, "1", run.due(0));
+      strikeAt(run, "3", run.due(2));
+      strikeAt(run, "5", run.due(3) - 300);
+      let v = tickAt(run, run.due(3) + 799);
+      check("the run isn't over until the last note's window has passed", [v.done, v.result], [null, null]);
+      v = tickAt(run, run.due(3) + 800);
+      check("the run ends with 'N/M on time' and the tongues missed",
+        [v.done?.title, v.result], ["Short", { score: "3/4 on time", missed: ["2"], tempo: null }]);
+      v = tickAt(run, run.due(3) + 800 + 1500);
+      check("after a Timed run the piece waits for Start, result still showing",
+        [v.playing, v.position, mark(v), v.timed.countIn, v.result?.score], [false, 0, "- - - -", null, "3/4 on time"]);
+      run.core.send({ type: "setTimed", on: false });
+      v = runWithMisses(run.t, run.core, 0);
+      check("a Timed run's first-strike hits are the day's cold run", v.result?.score, "again: 4/4");
+      const tomorrow = setup(storage);
+      tomorrow.t.now += 24 * 3600 * 1000;
+      v = runWithMisses(tomorrow.t, tomorrow.core, 0);
+      check("…and tomorrow's 'last time'", v.result?.score, "First run today: 4/4 · last time 3/4");
+    }
+
+    {
+      const run = timedRun(HINT_SONG); // 1 7 1 7 1 7 1 7
+      for (let b = 0; b < 8; b++) strikeAt(run, "3", run.due(b));
+      const v = tickAt(run, run.due(8));
+      check("each missed tongue is listed once", v.result, { score: "0/8 on time", missed: ["1", "7"], tempo: null });
+    }
+
+    {
+      const run = timedRun("title: Long end\nmelody: 1 2 - - -");
+      strikeAt(run, "1", run.due(0));
+      strikeAt(run, "2", run.due(1));
+      let v = tickAt(run, run.due(1) + 800);
+      check("a long last note: the run ends once its window has passed", v.result?.score, "2/2 on time");
+      v = tickAt(run, run.due(1) + 800 + 1500);
+      check("…and the pulse stops with it", [v.playing, v.timed.beatSeq], [false, run.v.timed.beatSeq + 5]);
+    }
+
+    {
+      const run = timedRun();
+      tickAt(run, run.due(0));
+      let v = run.core.send({ type: "open", what: "gear" });
+      check("opening an overlay stops a Timed run", [v.playing, v.timed.countIn, v.sound, v.position], [false, null, null, 0]);
+      v = tickAt(run, run.due(10));
+      check("…for good", [mark(v), v.done, v.result], ["- - - -", null, null]);
+    }
+
+    {
+      const { core } = setup();
+      check("Start with Timed off is Step mode: no count-in, no sound", (({ timed, sound }) => [timed.countIn, sound])(core.send({ type: "start" })), [null, null]);
+    }
+
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
     window.testResults = { failed, out: out.textContent };

@@ -47,8 +47,11 @@
     <footer>
       <div id="controls">
         <button id="restart-btn" type="button">Start</button>
-        <!-- Reserved for the Timed switch (#38); hidden until then. -->
-        <div id="timed" class="reserved"></div>
+        <!-- Start begins a Timed run while this is on. -->
+        <label id="timed" class="switch">
+          <input id="timed-switch" type="checkbox">
+          <span>Timed</span>
+        </label>
       </div>
       <p id="debug" hidden></p>
       <div id="note-bars" hidden></div>

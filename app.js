@@ -17,6 +17,7 @@ const els = {
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
   gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
+  timedSwitch: $("timed-switch"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -26,8 +27,18 @@ function noteHtml(id, cls = "") {
   return `<span class="note ${octave}${cls}">${digit}</span>`;
 }
 
-// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green.
-const stepHtml = (step) => (step ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : "")).join("") : "");
+// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green, and
+// a note missed in a Timed run red.
+const stepHtml = (step) => (step
+  ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : step.missed ? " missed" : "")).join("")
+  : "");
+
+// The finished run's line: the score, then any tongues missed in a Timed run.
+function resultHtml(result) {
+  if (!result) return "";
+  const missed = result.missed.length ? ` · missed ${result.missed.map((id) => noteHtml(id)).join(" ")}` : "";
+  return `${result.score}${missed}`;
+}
 
 const GROUPS = { exercise: "Exercise", "my-song": "My song" };
 const PARTS = { melody: "melody line", accomp: "accompaniment line", both: "both lines" };
@@ -58,12 +69,23 @@ function render(v) {
     els.feedback.innerHTML = `That was ${noteHtml(v.feedback.thatWas)}`;
   }
 
+  // Timed mode: the count-in's numbers, then a pulse on the current step for every beat.
+  els.feedback.classList.toggle("count-in", v.timed.countIn !== null);
+  if (v.timed.countIn !== null) els.feedback.textContent = String(v.timed.countIn);
+  if (before && v.timed.beatSeq !== before.timed.beatSeq) {
+    els.current.classList.remove("beat");
+    void els.current.offsetWidth; // restart the pulse animation
+    els.current.classList.add("beat");
+  }
+  if (v.sound?.key !== before?.sound?.key) playSound(v.sound);
+
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
-  els.result.textContent = els.doneResult.textContent = v.result?.score ?? "";
+  els.result.innerHTML = els.doneResult.innerHTML = resultHtml(v.result);
 
   els.restartBtn.textContent = v.playing ? "Restart" : "Start";
   els.restartBtn.classList.toggle("start", !v.playing);
+  els.timedSwitch.checked = v.timed.on;
   if (v.playing !== before?.playing) keepAwake(v.playing);
 
   els.pieces.hidden = v.overlay?.kind !== "pieces";
@@ -163,8 +185,38 @@ els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send(
 els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
+els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
 
 // --- Audio ---------------------------------------------------------------
+
+let audio = null; // the AudioContext, once Start has opened it
+let scheduled = []; // sources playing or waiting to play the core's current `sound`
+
+// Plays the core's sound events, cancelling whatever the last ones scheduled. Event times are on
+// the core's clock (Date.now), moved onto the audio clock here.
+function playSound(sound) {
+  scheduled.forEach((src) => { try { src.stop(); } catch { /* already stopped */ } });
+  scheduled = [];
+  if (!sound || !audio) return;
+  const now = Date.now();
+  for (const e of sound.events) {
+    const when = Math.max(audio.currentTime, audio.currentTime + (e.at - now) / 1000);
+    if (e.kind === "click") scheduled.push(click(when));
+  }
+}
+
+// A count-in click: a short, high tick, well above the drum's notes.
+function click(when) {
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.frequency.value = 2000;
+  gain.gain.setValueAtTime(0.4, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(when);
+  osc.stop(when + 0.05);
+  return osc;
+}
 
 async function openInput(ctx) {
   if (SIM) {
@@ -308,6 +360,7 @@ els.startBtn.addEventListener("click", async () => {
   try {
     const ctx = new AudioContext();
     await ctx.resume();
+    audio = ctx;
     const input = await openInput(ctx);
     await listen(ctx, input);
   } catch (err) {
