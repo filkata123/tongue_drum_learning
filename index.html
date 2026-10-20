@@ -17,18 +17,35 @@
 
   <main id="play" class="screen" hidden>
     <header>
-      <button id="melody-name" type="button" aria-haspopup="dialog"></button>
-      <span id="progress"></span>
+      <button id="piece-name" type="button" aria-haspopup="dialog">
+        <span id="piece-title"></span>
+        <small id="piece-part"></small>
+      </button>
     </header>
 
+    <!-- Reserved for Listen and its speed control (#37); hidden until then. -->
+    <div id="listen-row" class="reserved"></div>
+
     <div id="stage">
-      <div id="current"></div>
-      <div id="next-box">next <span id="next"></span></div>
+      <div id="steps">
+        <!-- Reserved for the Location hint (#28); hidden until then. -->
+        <div id="hint" class="reserved"></div>
+        <div id="current" class="step"></div>
+        <div id="next">
+          <div class="step"></div>
+          <div class="step"></div>
+          <div class="step"></div>
+        </div>
+      </div>
+      <p id="feedback"></p>
     </div>
 
     <footer>
-      <p id="feedback"></p>
-      <button id="restart-btn" type="button">Restart</button>
+      <div id="controls">
+        <button id="restart-btn" type="button">Start</button>
+        <!-- Reserved for the Timed switch (#38); hidden until then. -->
+        <div id="timed" class="reserved"></div>
+      </div>
       <p id="debug" hidden></p>
       <div id="note-bars" hidden></div>
       <p id="sim-hint" class="hint" hidden>Sim mode: keys 1–7 = middle row, Z X C V B = lower 3–7, 8 9 0 = upper 1–3</p>
