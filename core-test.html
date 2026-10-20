@@ -1344,6 +1344,94 @@
       check("corrupt saved tune scores mean none, not a crash", playTune(t, core, 1).result?.score, "7/8");
     }
 
+    // Progress marks in the piece list: each piece's latest cold run for its current part.
+    const markOf = (core, pieceId) => core.send({ type: "open", what: "pieces" }).overlay.groups
+      .flatMap((g) => g.pieces).find((p) => p.id === pieceId).mark;
+    const nextDay = (t) => { t.now += 24 * 3600 * 1000; };
+
+    {
+      const { t, core } = setup();
+      const short = pickNewSong(core, SHORT).piece.id;
+      check("a piece with no cold run shows no mark", markOf(core, short), null);
+      check("…and nor does an exercise never played", markOf(core, "d-major-scale"), null);
+      core.send({ type: "close" });
+      runWithMisses(t, core, 1);
+      check("the first cold run shows its score, with no trend", markOf(core, short), "3/4");
+      core.send({ type: "close" });
+      runWithMisses(t, core, 0);
+      check("later runs that day don't change the mark", markOf(core, short), "3/4");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 0);
+      check("a better cold run than the one before is marked ↑", markOf(core, short), "4/4 ↑");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 1);
+      check("a worse one is marked ↓", markOf(core, short), "3/4 ↓");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 1);
+      check("the same score is marked →", markOf(core, short), "3/4 →");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      runWithMisses(t, core, 0); // melody 3/3, on to accomp
+      check("a piece moved on to a part with no cold run yet shows no mark", markOf(core, duet), null);
+      core.send({ type: "close" });
+      runWithMisses(t, core, 1); // accomp 2/3
+      check("the mark is the current part's", markOf(core, duet), "2/3");
+      const later = setup(storage);
+      check("marks survive a new core on the same storage", markOf(later.core, duet), "2/3");
+    }
+
+    {
+      const { t, core } = seededCore(5);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      playTune(t, core, 1);
+      check("made-up tunes show no mark: their averages are at the top", markOf(core, "made-up-whole"), null);
+    }
+
+    // The list top: tongues found without help, and the made-up tune averages.
+    const listTop = (core) => core.send({ type: "open", what: "pieces" }).overlay;
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      check("no tongue is found without help at first", listTop(core).found, "0 of 15 tongues found without help");
+      core.send({ type: "close" });
+      pickNewSong(core, "title: Two tongues\nmelody: 1 7 1 7 1");
+      cleanRun(t, core); // 1 hit unaided three times, 7 only twice
+      check("a tongue counts once its hint has faded", listTop(core).found, "1 of 15 tongues found without help");
+      core.send({ type: "close" });
+      cleanRun(t, core);
+      check("…every faded tongue counts", listTop(core).found, "2 of 15 tongues found without help");
+      check("found tongues survive a new core on the same storage", listTop(setup(storage).core).found,
+        "2 of 15 tongues found without help");
+      core.send({ type: "close" });
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "3", at: t.now }); // a miss on 1 brings its hint back
+      check("a tongue whose hint came back no longer counts", listTop(core).found, "1 of 15 tongues found without help");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = seededCore(5, storage);
+      check("the list top shows both made-up tunes, before any is played", listTop(core).averages,
+        ["Made-up tune: middle row · no tunes yet", "Made-up tune: whole drum · no tunes yet"]);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      playTune(t, core, 1); // 7/8
+      playTune(t, core, 0); // 8/8
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      playTune(t, core, 2); // 6/8
+      check("…and each one's recent average once played", listTop(core).averages,
+        ["Made-up tune: middle row · recent average 6/8", "Made-up tune: whole drum · recent average 7.5/8"]);
+      check("the averages survive a new core on the same storage", listTop(seededCore(6, storage).core).averages,
+        ["Made-up tune: middle row · recent average 6/8", "Made-up tune: whole drum · recent average 7.5/8"]);
+    }
+
     // Listen. The core schedules the notes on the clock; the screen makes the sound.
     const LISTEN_SONG = "title: Listen test\nmelody: 1 2/ 3. 4 - |";
     // The sound's notes as "tongue@ms from now+ms long".

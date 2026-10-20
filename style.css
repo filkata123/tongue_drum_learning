@@ -275,6 +275,9 @@ footer {
   cursor: pointer;
 }
 #pieces .piece.current { border-color: #9ca3af; }
+#pieces .piece .mark { float: right; margin-left: 1rem; color: #9ca3af; }
+#pieces-progress { color: #9ca3af; margin: 1rem 0 0; }
+#pieces-progress p { margin: 0 0 0.25rem; }
 #pieces .song-row { display: flex; gap: 0.5rem; align-items: stretch; margin: 0 0 0.5rem; }
 #pieces .song-row .piece { flex: 1; min-width: 0; margin: 0; }
 #pieces .song-action {
