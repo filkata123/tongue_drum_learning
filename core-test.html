@@ -461,6 +461,118 @@
       check("the paste box opens empty again", [v.overlay.text, v.overlay.errors], ["", []]);
     }
 
+    // Edit and delete My songs.
+    function withSongs(core, ...texts) {
+      let v;
+      for (const text of texts) {
+        core.send({ type: "open", what: "editor" });
+        v = core.send({ type: "saveSong", text });
+      }
+      return songsIn(v).map((p) => p.id);
+    }
+
+    {
+      const { core } = setup();
+      const [id] = withSongs(core, "title: Morning tune\nmelody: 3 5 | 6 - |");
+      const v = core.send({ type: "open", what: "editor", pieceId: id });
+      check("Edit reopens the saved text in the paste box",
+        [v.overlay.kind, v.overlay.pieceId, v.overlay.text, v.overlay.errors], ["editor", id, "title: Morning tune\nmelody: 3 5 | 6 - |", []]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [first, second] = withSongs(core, "title: First\nmelody: 1", "title: Second\nmelody: 2");
+      core.send({ type: "open", what: "editor", pieceId: first });
+      let v = core.send({ type: "saveSong", text: "title: First, fixed\nmelody: 1 3 5" });
+      check("saving an edit changes that song in place, back in the piece list",
+        [v.overlay.kind, songsIn(v).map((p) => [p.id, p.title])], ["pieces", [[first, "First, fixed"], [second, "Second"]]]);
+      check("an edited song plays its new notes", core.send({ type: "pick", pieceId: first }).steps.map(ids).join(" "), "1 3 5");
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("an edit is kept after a fresh core on the same storage", songsIn(v).map((p) => p.title), ["First, fixed", "Second"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [id] = withSongs(core, "title: Good\nmelody: 1 2");
+      core.send({ type: "open", what: "editor", pieceId: id });
+      let v = core.send({ type: "saveSong", text: "title: Broken\nmelody: 1 x" });
+      check("a bad edit is refused and stays in the paste box for that song",
+        [v.overlay.kind, v.overlay.pieceId, v.overlay.errors.length], ["editor", id, 1]);
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("a bad edit isn't saved", songsIn(v).map((p) => p.title), ["Good"]);
+      core.send({ type: "saveSong", text: "title: Better\nmelody: 1 3" });
+      v = core.send({ type: "open", what: "pieces" });
+      check("fixing a refused edit saves it over the same song, not as a new one", songsIn(v).map((p) => [p.id, p.title]), [[id, "Better"]]);
+    }
+
+    {
+      const { core } = setup();
+      const [id] = withSongs(core, "title: Playing\nmelody: 1 2 3");
+      core.send({ type: "pick", pieceId: id });
+      core.send({ type: "start" });
+      core.send({ type: "open", what: "pieces" });
+      core.send({ type: "open", what: "editor", pieceId: id });
+      core.send({ type: "saveSong", text: "title: Playing, edited\nmelody: 5 6" });
+      const v = core.send({ type: "close" });
+      check("editing the current song shows its new notes from the first step, waiting for Start",
+        [v.piece.title, v.steps.map(ids).join(" "), v.position, v.playing], ["Playing, edited", "5 6", 0, false]);
+    }
+
+    {
+      const { core } = setup();
+      let threw = false;
+      try { core.send({ type: "open", what: "editor", pieceId: core.send({ type: "tick" }).piece.id }); } catch { threw = true; }
+      check("editing an exercise throws", threw, true);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [keep, gone] = withSongs(core, "title: Keep\nmelody: 1", "title: Gone\nmelody: 2");
+      core.send({ type: "open", what: "pieces" });
+      let v = core.send({ type: "deleteSong", pieceId: gone });
+      check("a deleted song leaves My songs, and the piece list stays open",
+        [v.overlay.kind, songsIn(v).map((p) => p.id)], ["pieces", [keep]]);
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("a deleted song is gone after a fresh core on the same storage", songsIn(v).map((p) => p.title), ["Keep"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [id] = withSongs(core, "title: Current\nmelody: 3 5 6");
+      const firstExercise = core.send({ type: "open", what: "pieces" }).overlay.groups[0].pieces[0];
+      core.send({ type: "pick", pieceId: id });
+      core.send({ type: "start" });
+      core.send({ type: "open", what: "pieces" });
+      let v = core.send({ type: "deleteSong", pieceId: id });
+      check("deleting the current song makes the first exercise current, waiting for Start",
+        [v.piece.id, v.position, v.playing], [firstExercise.id, 0, false]);
+      v = setup(storage).core.send({ type: "tick" });
+      check("after deleting the current song, a fresh core starts on the first exercise", v.piece.id, firstExercise.id);
+    }
+
+    {
+      const { core } = setup();
+      const [a, b] = withSongs(core, "title: A\nmelody: 1", "title: B\nmelody: 2");
+      core.send({ type: "pick", pieceId: a });
+      core.send({ type: "deleteSong", pieceId: b });
+      core.send({ type: "open", what: "editor" });
+      const v = core.send({ type: "saveSong", text: "title: C\nmelody: 3" });
+      check("deleting another song leaves the current one alone", v.piece.id, a);
+      check("a song can be added after a delete", songsIn(v).map((p) => p.title), ["A", "C"]);
+    }
+
+    {
+      const { core } = setup();
+      const exercise = core.send({ type: "tick" }).piece.id;
+      const throws = (cmd) => { try { core.send(cmd); return false; } catch { return true; } };
+      check("deleting an exercise or an unknown piece throws",
+        [throws({ type: "deleteSong", pieceId: exercise }), throws({ type: "deleteSong", pieceId: "song-99" })], [true, true]);
+    }
+
     {
       const { core } = setup();
       let threw = false;
