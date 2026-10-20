@@ -66,7 +66,8 @@ export function createPracticeCore({ storage, clock, random }) {
   function view() {
     const { piece } = state;
     return {
-      piece: { id: piece.id, title: piece.title, group: piece.group, part: null },
+      // Until two-line Step mode lands, a two-line piece is always in its melody part.
+      piece: { id: piece.id, title: piece.title, group: piece.group, part: piece.lines.accomp ? "melody" : null },
       playing: state.playing,
       steps: stepTongues(piece).map((id, i) => ({
         tongues: [{ id, heard: i < state.position || (i === state.position && state.heard) }],
