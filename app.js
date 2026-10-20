@@ -9,8 +9,8 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 const $ = (id) => document.getElementById(id);
 const els = {
   start: $("start"), startBtn: $("start-btn"), startError: $("start-error"),
-  play: $("play"), stage: $("stage"), current: $("current"), next: $("next"),
-  melodyName: $("melody-name"), progress: $("progress"), feedback: $("feedback"),
+  play: $("play"), stage: $("stage"), current: $("current"), next: [...$("next").children],
+  pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
@@ -20,10 +20,16 @@ const els = {
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
 
-function noteHtml(id) {
+function noteHtml(id, cls = "") {
   const { digit, octave } = parseToken(id);
-  return `<span class="note ${octave}">${digit}</span>`;
+  return `<span class="note ${octave}${cls}">${digit}</span>`;
 }
+
+// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green.
+const stepHtml = (step) => (step ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : "")).join("") : "");
+
+const GROUPS = { exercise: "Exercise", "my-song": "My song" };
+const PARTS = { melody: "melody line", accomp: "accompaniment line", both: "both lines" };
 
 // Draws a view snapshot from the core. The same snapshot comes back while nothing changes.
 let shown = null;
@@ -33,15 +39,12 @@ function render(v) {
   shown = v;
 
   const step = v.steps[v.position];
-  els.melodyName.textContent = v.piece.title;
-  els.current.innerHTML = noteHtml(step.tongues[0].id);
-  const next = v.steps[v.position + 1];
-  els.next.innerHTML = next ? noteHtml(next.tongues[0].id) : "✓";
-  els.progress.innerHTML = v.steps
-    .map((_, i) => `<span class="dot ${i < v.position ? "done" : i === v.position ? "now" : ""}"></span>`)
-    .join("");
+  els.pieceTitle.textContent = v.piece.title;
+  els.piecePart.textContent = [GROUPS[v.piece.group], PARTS[v.piece.part]].filter(Boolean).join(" · ");
+  els.current.innerHTML = stepHtml(step);
+  // Always three next slots, so the step window never grows or shifts near the end.
+  els.next.forEach((el, i) => { el.innerHTML = stepHtml(v.steps[v.position + 1 + i]); });
 
-  els.stage.classList.toggle("hit", !v.done && step.tongues.every((t) => t.heard));
   if (!v.feedback) {
     els.stage.classList.remove("miss");
     els.feedback.textContent = "";
@@ -57,6 +60,7 @@ function render(v) {
 
   els.restartBtn.textContent = v.playing ? "Restart" : "Start";
   els.restartBtn.classList.toggle("start", !v.playing);
+  if (v.playing !== before?.playing) keepAwake(v.playing);
 
   els.pieces.hidden = v.overlay?.kind !== "pieces";
   // Rebuilt only when the list itself changed, so a tap isn't lost to a re-render.
@@ -120,7 +124,7 @@ function smallButton(text, label, onClick) {
   return btn;
 }
 
-els.melodyName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
+els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
 els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.addSong.addEventListener("click", () => render(core.send({ type: "open", what: "editor" })));
 els.editorClose.addEventListener("click", () => render(core.send({ type: "close" })));
@@ -258,10 +262,21 @@ function setupSimKeys(ctx, out) {
   });
 }
 
-// Keep a phone screen from dimming mid-practice.
-async function keepAwake() {
-  try { await navigator.wakeLock?.request("screen"); } catch { /* not supported or denied */ }
+// Keeps a phone screen from dimming while practising. The browser drops the lock when the page
+// is hidden, so it's asked for again on return.
+let wakeLock = null;
+async function keepAwake(on) {
+  if (!on) {
+    wakeLock?.release();
+    wakeLock = null;
+    return;
+  }
+  if (wakeLock && !wakeLock.released) return;
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* not supported or denied */ }
 }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") keepAwake(shown?.playing);
+});
 
 els.startBtn.addEventListener("click", async () => {
   els.startError.hidden = true;
@@ -282,8 +297,4 @@ els.startBtn.addEventListener("click", async () => {
   els.debug.hidden = !DEBUG;
   els.simHint.hidden = !SIM;
   render(core.send({ type: "start" }));
-  keepAwake();
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") keepAwake();
-  });
 });

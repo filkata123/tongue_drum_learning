@@ -265,6 +265,8 @@
       const { core } = setup();
       const v = core.send({ type: "pick", pieceId: "bells-two-lines" });
       check("a two-line piece plays its melody line in Step mode", v.steps.map(ids).join(" "), "5 3 5 3 1");
+      check("a two-line piece's header part is the melody line", v.piece.part, "melody");
+      check("a one-line piece has no part", core.send({ type: "pick", pieceId: "simple-phrase" }).piece.part, null);
       let threw = false;
       try { core.send({ type: "pick", pieceId: "no-such-piece" }); } catch { threw = true; }
       check("picking an unknown piece throws", threw, true);
