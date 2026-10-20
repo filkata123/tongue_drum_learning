@@ -66,7 +66,28 @@ header {
 
 /* Reserved for controls whose tickets haven't landed: they hold their space, unseen. */
 .reserved { visibility: hidden; }
-#listen-row { width: 100%; height: 2.75rem; }
+#listen-row {
+  width: 100%;
+  height: 2.75rem;
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+#listen-row button {
+  font: inherit;
+  font-size: 1rem;
+  color: #9ca3af;
+  background: none;
+  border: 2px solid #374151;
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  cursor: pointer;
+}
+#listen-btn.playing { color: #f9fafb; border-color: #9ca3af; }
+#listen-speed { display: flex; align-items: center; gap: 0.5rem; color: #9ca3af; }
+#listen-speed button { width: 2.25rem; padding: 0.35rem 0; }
+#listen-bpm { min-width: 3.5em; text-align: center; }
 
 #stage {
   flex: 1;
