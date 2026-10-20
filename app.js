@@ -1,4 +1,5 @@
-import { DRUM_NOTES, MELODIES, NOTE_BY_ID, parseToken } from "./notes.js";
+import { createPracticeCore } from "./core.js";
+import { DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
 import { CONFIG, NoteListener } from "./pitch.js";
 
 const params = new URLSearchParams(location.search);
@@ -14,67 +15,42 @@ const els = {
   done: $("done"), doneText: $("done-text"),
 };
 
-const STORAGE_KEY = "tongue-drum:melody";
-const state = {
-  melodyIdx: Number(localStorage.getItem(STORAGE_KEY)) % MELODIES.length || 0,
-  step: 0,
-  busy: false, // true during the hit/done animations, while input is ignored
-};
+const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
 
 function noteHtml(id) {
   const { digit, octave } = parseToken(id);
   return `<span class="note ${octave}">${digit}</span>`;
 }
 
-function render() {
-  const melody = MELODIES[state.melodyIdx];
-  els.melodyName.textContent = melody.name;
-  els.current.innerHTML = noteHtml(melody.notes[state.step]);
-  const nextId = melody.notes[state.step + 1];
-  els.next.innerHTML = nextId ? noteHtml(nextId) : "✓";
-  els.progress.innerHTML = melody.notes
-    .map((_, i) => `<span class="dot ${i < state.step ? "done" : i === state.step ? "now" : ""}"></span>`)
+// Draws a view snapshot from the core. The same snapshot comes back while nothing changes.
+let shown = null;
+function render(v) {
+  if (v === shown) return;
+  const before = shown;
+  shown = v;
+
+  const step = v.steps[v.position];
+  els.melodyName.textContent = v.piece.title;
+  els.current.innerHTML = noteHtml(step.tongues[0].id);
+  const next = v.steps[v.position + 1];
+  els.next.innerHTML = next ? noteHtml(next.tongues[0].id) : "✓";
+  els.progress.innerHTML = v.steps
+    .map((_, i) => `<span class="dot ${i < v.position ? "done" : i === v.position ? "now" : ""}"></span>`)
     .join("");
-}
 
-function onStrike(heard) {
-  if (state.busy) return;
-  const target = MELODIES[state.melodyIdx].notes[state.step];
-
-  if (heard.note.id === target) {
-    els.feedback.textContent = "";
+  els.stage.classList.toggle("hit", !v.done && step.tongues.every((t) => t.heard));
+  if (!v.feedback) {
     els.stage.classList.remove("miss");
-    els.stage.classList.add("hit");
-    state.busy = true;
-    setTimeout(advance, 250);
-  } else {
+    els.feedback.textContent = "";
+  } else if (v.feedback.seq !== before?.feedback?.seq) {
     els.stage.classList.remove("miss");
     void els.stage.offsetWidth; // restart the shake animation
     els.stage.classList.add("miss");
-    els.feedback.innerHTML = `That was ${noteHtml(heard.note.id)}`;
-  }
-}
-
-function advance() {
-  els.stage.classList.remove("hit", "miss");
-  const melody = MELODIES[state.melodyIdx];
-  state.step++;
-  if (state.step < melody.notes.length) {
-    state.busy = false;
-    render();
-    return;
+    els.feedback.innerHTML = `That was ${noteHtml(v.feedback.thatWas)}`;
   }
 
-  els.doneText.textContent = melody.name;
-  els.done.hidden = false;
-  setTimeout(() => {
-    state.melodyIdx = (state.melodyIdx + 1) % MELODIES.length;
-    state.step = 0;
-    localStorage.setItem(STORAGE_KEY, state.melodyIdx);
-    els.done.hidden = true;
-    state.busy = false;
-    render();
-  }, 1500);
+  els.done.hidden = !v.done;
+  if (v.done) els.doneText.textContent = v.done.title;
 }
 
 // --- Audio ---------------------------------------------------------------
@@ -118,8 +94,10 @@ async function listen(ctx, input) {
       total += take;
       if (sinceHop === hop) {
         sinceHop = 0;
-        const strike = listener.process(win, (total / ctx.sampleRate) * 1000);
-        if (strike) onStrike(strike);
+        const t = (total / ctx.sampleRate) * 1000;
+        const strike = listener.process(win, t);
+        // Move the onset from audio time onto the core's clock.
+        if (strike) render(core.send({ type: "strike", tongue: strike.note.id, at: Date.now() - (t - strike.at) }));
       }
     }
   };
@@ -127,6 +105,7 @@ async function listen(ctx, input) {
   const bars = DEBUG ? buildNoteBars() : null;
   function tick() {
     requestAnimationFrame(tick);
+    render(core.send({ type: "tick" }));
     if (!listener.reading) return;
     const { level, notes, floors, heard } = listener.reading;
     els.levelBar.style.width = `${dbPercent(20 * Math.log10(level), -70, -10)}%`;
@@ -210,7 +189,7 @@ els.startBtn.addEventListener("click", async () => {
   els.play.hidden = false;
   els.debug.hidden = !DEBUG;
   els.simHint.hidden = !SIM;
-  render();
+  render(core.send({ type: "start" }));
   keepAwake();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") keepAwake();

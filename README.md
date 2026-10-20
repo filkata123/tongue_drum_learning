@@ -37,6 +37,7 @@ Pushing to `main` updates the GitHub Pages site within a few minutes.
   bar passes the orange line (the bar turns green). Useful for checking what a microphone can hear.
 - `test.html`: runs the note detector against synthetic drum strikes, including real-drum quirks
   like neighbouring tongues ringing along.
+- `core-test.html`: runs the practice rules (`core.js`) against a fake clock and storage.
 
 ## How note detection works
 

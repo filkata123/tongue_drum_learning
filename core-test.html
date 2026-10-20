@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Practice core tests</title>
+  <style>body { font-family: ui-monospace, monospace; background: #111827; color: #f9fafb; padding: 1rem; } .fail { color: #f87171; } .pass { color: #22c55e; }</style>
+</head>
+<body>
+  <h1>Practice core tests</h1>
+  <pre id="out"></pre>
+  <script type="module">
+    // Cache-busted so a plain reload always tests the latest code.
+    const bust = `?v=${Date.now()}`;
+    const { createPracticeCore } = await import(`./core.js${bust}`);
+
+    const out = document.getElementById("out");
+    const results = [];
+
+    function check(name, got, want) {
+      const ok = JSON.stringify(got) === JSON.stringify(want);
+      results.push({ name, ok });
+      out.innerHTML += `<span class="${ok ? "pass" : "fail"}">${ok ? "PASS" : "FAIL"}</span> ${name}\n`
+        + (ok ? "" : `     want ${JSON.stringify(want)}\n     got  ${JSON.stringify(got)}\n`);
+    }
+
+    // localStorage stand-in.
+    function fakeStorage(entries = {}) {
+      const m = new Map(Object.entries(entries));
+      return {
+        getItem: (k) => (m.has(k) ? m.get(k) : null),
+        setItem: (k, v) => m.set(k, String(v)),
+        removeItem: (k) => m.delete(k),
+      };
+    }
+
+    // A repeatable stand-in for Math.random.
+    function seeded(seed) {
+      let s = seed;
+      return () => (s = (s * 16807) % 2147483647) / 2147483647;
+    }
+
+    // A core on a clock the test moves by hand: t.now += 300.
+    function setup(storage = fakeStorage()) {
+      const t = { now: new Date(2026, 9, 20, 9).getTime() };
+      const core = createPracticeCore({ storage, clock: () => t.now, random: seeded(1) });
+      return { t, core, storage };
+    }
+
+    const ids = (step) => step.tongues.map((tg) => tg.id);
+
+    {
+      const { core } = setup();
+      let v = core.send({ type: "tick" });
+      check("first render shows the first exercise, not yet playing",
+        [v.piece.title, v.piece.group, v.playing, v.position], ["D major scale", "exercise", false, 0]);
+      check("steps are the exercise's tongues, none heard yet",
+        v.steps.map(ids).join(" "), "1 2 3 4 5 6 7 ˙1");
+      v = core.send({ type: "start" });
+      check("start begins playing on the first step", [v.playing, v.position], [true, 0]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      let v = core.send({ type: "strike", tongue: "3", at: t.now }); // the scale starts on 1
+      check("wrong tongue says what it was", v.feedback.thatWas, "3");
+      check("wrong tongue stays on the step", v.position, 0);
+      const first = v.feedback.seq;
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("the same miss again restarts the shake", v.feedback.seq > first, true);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      let v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("right tongue is heard straight away, during the flash",
+        [v.steps[0].tongues[0].heard, v.position], [true, 0]);
+      check("right tongue clears 'That was'", v.feedback, null);
+      t.now += 100;
+      v = core.send({ type: "strike", tongue: "2", at: t.now });
+      check("strikes during the flash are ignored", v.steps[1].tongues[0].heard, false);
+      t.now += 149;
+      check("still on the step just before the flash ends", core.send({ type: "tick" }).position, 0);
+      t.now += 1;
+      v = core.send({ type: "tick" });
+      check("right tongue moves on after the flash", [v.position, v.steps[1].tongues[0].heard], [1, false]);
+    }
+
+    // Hits every remaining step of the current piece, waiting out each flash.
+    function playThrough(t, core) {
+      let v = core.send({ type: "tick" });
+      while (!v.done) {
+        core.send({ type: "strike", tongue: v.steps[v.position].tongues[0].id, at: t.now });
+        t.now += 300;
+        v = core.send({ type: "tick" });
+      }
+      return v;
+    }
+
+    {
+      const { t, core, storage } = setup();
+      core.send({ type: "start" });
+      let v = playThrough(t, core);
+      check("finishing a piece says which piece was done", v.done.title, "D major scale");
+      check("every step was heard", v.steps.every((s) => s.tongues[0].heard), true);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("strikes while done is showing are ignored", v.feedback, null);
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      check("after done, the next exercise starts from its first step",
+        [v.done, v.piece.title, v.position, v.playing], [null, "Simple phrase", 0, true]);
+      check("the next exercise is remembered", storage.getItem("tongue-drum:melody"), "1");
+    }
+
+    {
+      const title = (stored) => setup(fakeStorage({ "tongue-drum:melody": stored })).core.send({ type: "tick" }).piece.title;
+      check("picks up at the remembered exercise", title("5"), "Upper octave");
+      for (const stored of ["not a number", "-1", "1.5", "7"])
+        check(`a corrupt remembered exercise ("${stored}") means the first one`, title(stored), "D major scale");
+      check("after the last exercise comes the first again", (() => {
+        const { t, core, storage } = setup(fakeStorage({ "tongue-drum:melody": "6" }));
+        core.send({ type: "start" });
+        playThrough(t, core);
+        t.now += 1500;
+        return [core.send({ type: "tick" }).piece.title, storage.getItem("tongue-drum:melody")];
+      })(), ["D major scale", "0"]);
+    }
+
+    {
+      const { t, core } = setup();
+      const a = core.send({ type: "start" });
+      t.now += 1000;
+      check("a tick with nothing changed returns the same snapshot", core.send({ type: "tick" }) === a, true);
+      const b = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a change returns a new snapshot", b !== a, true);
+      check("the old snapshot is left as it was", a.feedback, null);
+    }
+
+    {
+      const { t, core } = setup();
+      let v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("strikes before Start are ignored", v.feedback, null);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "strike", tongue: "5", at: t.now });
+      v = core.send({ type: "start" });
+      check("Restart goes back to the first step and clears 'That was'",
+        [v.position, v.steps[0].tongues[0].heard, v.feedback, v.playing], [0, false, null, true]);
+    }
+
+    {
+      const { t, core } = setup(fakeStorage({ "tongue-drum:melody": "5" }));
+      core.send({ type: "start" });
+      for (const tongue of ["˙1", "˙2", "˙3", "˙2"]) {
+        core.send({ type: "strike", tongue, at: t.now });
+        t.now += 300;
+        core.send({ type: "tick" });
+      }
+      core.send({ type: "strike", tongue: "˙1", at: t.now });
+      t.now += 10000; // the screen was asleep: no ticks through the flash and done
+      const v = core.send({ type: "tick" });
+      check("one late tick catches up through the flash and done",
+        [v.piece.title, v.position, v.done], ["Lower octave", 0, null]);
+    }
+
+    {
+      const { core } = setup();
+      let threw = false;
+      try { core.send({ type: "dance" }); } catch { threw = true; }
+      check("an unknown command throws", threw, true);
+    }
+
+    const failed = results.filter((r) => !r.ok).length;
+    out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
+    window.testResults = { failed, out: out.textContent };
+  </script>
+</body>
+</html>
