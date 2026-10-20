@@ -1,7 +1,7 @@
 // The practice core: every Step mode rule, with no DOM, mic or audio output.
 // The screen turns DOM events and detector strikes into commands and renders the view that
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
-import { EXERCISES, halfOf } from "./notes.js";
+import { DRUM_NOTES, EXERCISES, halfOf } from "./notes.js";
 import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
 import { MADE_UP_TUNES, makeUpTune } from "./tunes.js";
 
@@ -126,13 +126,17 @@ export function createPracticeCore({ storage, clock, random }) {
   // Every made-up tune is a cold run: each finished one is saved under its exercise, and its line
   // adds the average of that exercise's latest runs (this one included) once there's more than one.
   const tunes = loadObject(storage, TUNES_KEY);
+  const recentTunes = (id) => (Array.isArray(tunes[id]) ? tunes[id] : []);
+  // The average of some tune runs as "7.8/8", to one decimal place.
+  function averageOf(runs) {
+    const mean = (i) => Math.round((runs.reduce((sum, r) => sum + r[i], 0) / runs.length) * 10) / 10;
+    return `${mean(0)}/${mean(1)}`;
+  }
   function scoreTune(run) {
-    const saved = Array.isArray(tunes[state.piece.id]) ? tunes[state.piece.id] : [];
-    const recent = tunes[state.piece.id] = [...saved, run].slice(-RECENT_TUNES);
+    const recent = tunes[state.piece.id] = [...recentTunes(state.piece.id), run].slice(-RECENT_TUNES);
     storage.setItem(TUNES_KEY, JSON.stringify(tunes));
     if (recent.length === 1) return run.join("/");
-    const mean = (i) => Math.round((recent.reduce((sum, r) => sum + r[i], 0) / recent.length) * 10) / 10;
-    return `${run.join("/")} · your recent average ${mean(0)}/${mean(1)}`;
+    return `${run.join("/")} · your recent average ${averageOf(recent)}`;
   }
 
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
@@ -188,13 +192,32 @@ export function createPracticeCore({ storage, clock, random }) {
   state.part = partOf(state.piece);
   const steps = () => stepsOf(state.piece, state.part);
 
+  // A piece's progress mark: its latest cold run in its current part, with a trend against the
+  // cold run before ("14/18 ↑"). No cold run, no mark. Made-up tunes show theirs at the list top.
+  function markOf(piece) {
+    if (piece.row) return null;
+    const days = scores[piece.id]?.[partOf(piece) ?? "melody"];
+    if (!days || typeof days !== "object") return null;
+    const [last, before] = Object.keys(days).sort().reverse().map((d) => days[d]).filter(Array.isArray);
+    if (!last) return null;
+    const ratio = ([hits, steps]) => hits / steps;
+    const trend = !before ? "" : ratio(last) > ratio(before) ? " ↑" : ratio(last) < ratio(before) ? " ↓" : " →";
+    return last.join("/") + trend;
+  }
+
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
-    const entry = (p) => ({ id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: null, tempo: null });
+    const entry = (p) => ({
+      id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: markOf(p), tempo: null,
+    });
     return {
       kind: "pieces",
-      found: "",
-      averages: [],
+      // A tongue is found without help once its Location hint has faded.
+      found: `${DRUM_NOTES.filter((n) => faded(n.id)).length} of ${DRUM_NOTES.length} tongues found without help`,
+      averages: MADE_UP_TUNES.map(({ id, title }) => {
+        const recent = recentTunes(id);
+        return `${title} · ${recent.length ? `recent average ${averageOf(recent)}` : "no tunes yet"}`;
+      }),
       groups: [
         { title: "Exercises", pieces: ALL_EXERCISES.map(entry) },
         { title: "My songs", pieces: songs.map(entry) },

@@ -13,7 +13,7 @@ const els = {
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
-  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), piecesProgress: $("pieces-progress"), addSong: $("add-song"),
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
   gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
@@ -114,7 +114,14 @@ function renderEditor({ pieceId, text, errors }, wasOpen) {
   }));
 }
 
-function renderPieces({ groups }) {
+function renderPieces({ found, averages, groups }) {
+  // Progress shows only here: tongues found without help and the made-up tune averages on top,
+  // each piece's latest cold run beside its title.
+  els.piecesProgress.replaceChildren(...[found, ...averages].map((line) => {
+    const p = document.createElement("p");
+    p.textContent = line;
+    return p;
+  }));
   els.piecesGroups.replaceChildren(...groups.flatMap((g) => {
     const title = document.createElement("h2");
     title.textContent = g.title;
@@ -129,6 +136,12 @@ function renderPieces({ groups }) {
       btn.type = "button";
       btn.className = `piece${p.current ? " current" : ""}`;
       btn.textContent = p.title;
+      if (p.mark) {
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        mark.textContent = p.mark;
+        btn.append(mark);
+      }
       btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
       if (!p.editable) return btn;
       // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
