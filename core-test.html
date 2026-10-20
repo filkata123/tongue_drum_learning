@@ -169,10 +169,7 @@
     }
 
     {
-      const writes = [];
       const storage = fakeStorage({ "tongue-drum:melody": "5" });
-      const setItem = storage.setItem;
-      storage.setItem = (k, v) => { writes.push(k); setItem(k, v); };
       const { t, core } = setup(storage);
       let v = core.send({ type: "tick" });
       check("the old saved melody index is ignored", v.piece.title, "D major scale");
@@ -180,7 +177,7 @@
       playThrough(t, core);
       t.now += 1500;
       core.send({ type: "tick" });
-      check("the old melody index is never written", writes.includes("tongue-drum:melody"), false);
+      check("…and still ignored by a fresh core after a run", setup(storage).core.send({ type: "tick" }).piece.title, "D major scale");
     }
 
     {
@@ -820,6 +817,33 @@
       check("no hint before Start, however long you wait", core.send({ type: "tick" }).hint, null);
     }
 
+    for (const what of ["pieces", "gear"]) {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 3000;
+      core.send({ type: "open", what });
+      t.now += 10000;
+      let v = core.send({ type: "tick" });
+      check(`no hint comes up behind the open ${what} overlay`, v.hint, null);
+      v = core.send({ type: "close" });
+      check(`…nor on closing it (${what})`, v.hint, null);
+      t.now += 4999;
+      check(`the 5 s wait starts over once the ${what} overlay is closed`, core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check(`…and the hint appears 5 s after closing (${what})`, core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      // Opened during the hit flash: the run moves on behind the overlay, but its wait doesn't start.
+      const { t, core } = playSong(HINT_SONG);
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      core.send({ type: "open", what: "pieces" });
+      t.now += 10000;
+      let v = core.send({ type: "close" });
+      check("a step reached behind an overlay shows no hint on closing", [v.position, v.hint], [1, null]);
+      t.now += 5000;
+      check("…until 5 s after closing", core.send({ type: "tick" }).hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
     // The fade. Strikes a tongue and waits out the hit flash.
     function strikeAndWait(t, core, tongue) {
       core.send({ type: "strike", tongue, at: t.now });
@@ -1055,6 +1079,18 @@
         [v.feedback?.thatWas, v.hint], ["4", { half: "right", lit: ["1"], wrong: "4" }]);
     }
 
+    {
+      // Both lines on the same tongue at once: one tongue can only be struck once.
+      const { t, core } = playChords("title: Unison\nmelody: 1 2\naccomp: 1 _5");
+      let v = core.send({ type: "tick" });
+      check("the same tongue on both lines at once is a single-tongue step",
+        v.steps.map((s) => ids(s).join("+")).join(" "), "1 2+_5");
+      core.send(report(t, ["1", 0]));
+      t.now += 300;
+      v = core.send({ type: "tick" });
+      check("…hit with one strike, so the run moves on", v.position, 1);
+    }
+
     // The fade on chord steps. Both part: 3+1 three times, then 3 alone, then 1 alone.
     const CHORD_FADE = "title: Chord fade\nmelody: 3 3 3 3 1\naccomp: 1 1 1 0 0";
     const chordAndWait = (t, core, ...tongues) => {
@@ -1271,7 +1307,9 @@
       const short = pickNewSong(core, SHORT).piece.id;
       runWithMisses(t, core, 1);
       core.send({ type: "deleteSong", pieceId: short });
-      check("deleting a song removes its scores from storage", JSON.parse(storage.getItem("tongue-drum:scores"))[short], undefined);
+      const fresh = setup(storage).core;
+      check("deleting a song removes its scores: a new song with its id has no mark, even in a fresh core",
+        [pickNewSong(fresh, SHORT).piece.id, songsIn(fresh.send({ type: "open", what: "pieces" }))[0].mark], [short, null]);
       pickNewSong(core, SHORT); // a new song can take the deleted one's id
       const v = runWithMisses(t, core, 0);
       check("…so a new song with the deleted one's id starts with no score", v.result?.score, "First run today: 4/4");
@@ -1312,15 +1350,17 @@
       const storage = fakeStorage();
       const { t, core } = seededCore(5, storage);
       core.send({ type: "pick", pieceId: "made-up-whole" });
-      check("the first made-up tune shows just its score", playTune(t, core, 1).result?.score, "7/8");
+      check("the first made-up tune shows its score and the average so far", playTune(t, core, 1).result?.score,
+        "7/8 · your recent average 7/8");
       check("the next one that day is saved too, and shows the average",
         playTune(t, core, 0).result?.score, "8/8 · your recent average 7.5/8");
       check("…and the one after", playTune(t, core, 2).result?.score, "6/8 · your recent average 7/8");
       const later = seededCore(6, storage);
       check("the scores survive a new core on the same storage", playTune(later.t, later.core, 0).result?.score,
         "8/8 · your recent average 7.3/8");
-      check("made-up tunes aren't scored as cold runs",
-        JSON.parse(storage.getItem("tongue-drum:scores") ?? "{}")["made-up-whole"], undefined);
+      const again = seededCore(7, storage);
+      check("made-up tunes aren't scored as cold runs: no 'First run today' or 'again', even in a fresh core",
+        /First run today|again/.test(playTune(again.t, again.core, 0).result?.score), false);
     }
 
     {
@@ -1333,7 +1373,7 @@
       v = playTune(t, core, 0);
       check("…and only those: the 11th tune ago drops out", v.result?.score, "8/8 · your recent average 8/8");
       core.send({ type: "pick", pieceId: "made-up-whole" });
-      check("the other exercise keeps its own scores", playTune(t, core, 4).result?.score, "4/8");
+      check("the other exercise keeps its own scores", playTune(t, core, 4).result?.score, "4/8 · your recent average 4/8");
       core.send({ type: "pick", pieceId: "made-up-middle" });
       check("…and doesn't count towards this one's average", playTune(t, core, 2).result?.score, "6/8 · your recent average 7.8/8");
     }
@@ -1341,7 +1381,7 @@
     {
       const { t, core } = seededCore(4, fakeStorage({ "tongue-drum:tunes": "{oops" }));
       core.send({ type: "pick", pieceId: "made-up-middle" });
-      check("corrupt saved tune scores mean none, not a crash", playTune(t, core, 1).result?.score, "7/8");
+      check("corrupt saved tune scores mean none, not a crash", playTune(t, core, 1).result?.score, "7/8 · your recent average 7/8");
     }
 
     // Progress marks in the piece list: each piece's latest cold run for its current part.
@@ -1530,11 +1570,11 @@
       check("…and down to 40 at least", v.listen.speed, 40);
       core.send({ type: "listen" });
       v = core.send({ type: "listen" });
-      check("the speed is forgotten after the playback: the next one starts at 60",
+      check("the speed is forgotten once Listen stops: the next Listen starts at 60",
         [v.listen.speed, heardAt(t, v)], [60, "1@0+1000 2@1000+500 3@1500+1500 4@3000+2000"]);
       t.now += 5000;
       v = core.send({ type: "tick" });
-      check("…also after a playback that ran to its end", [v.listen.playing, v.listen.speed], [false, 60]);
+      check("…also after a Listen that ran to its end", [v.listen.playing, v.listen.speed], [false, 60]);
       check("the speed control does nothing when Listen isn't playing", core.send({ type: "nudgeListenSpeed", by: 1 }).listen.speed, 60);
     }
 
@@ -1700,6 +1740,10 @@
 
     {
       const storage = fakeStorage();
+      const found = () => listTop(setup(storage).core).found;
+      const step = playSong(HINT_SONG, storage); // Step mode: 3 unaided hits each find 1 and 7
+      for (const tg of ["1", "7", "1", "7", "1", "7"]) strikeAndWait(step.t, step.core, tg);
+      check("(Step hits find 1 and 7)", found(), "2 of 15 tongues found without help");
       const run = timedRun(HINT_SONG, storage);
       const seen = [];
       for (let b = 0; b < 8; b++) {
@@ -1707,11 +1751,13 @@
         seen.push(tickAt(run, run.due(b) + 900).hint);
       }
       check("no hint ever appears in Timed mode, however many misses", seen.filter(Boolean), []);
-      check("Timed misses don't change the fade counts", storage.getItem("tongue-drum:fade"), null);
-      const again = timedRun(HINT_SONG, storage);
+      check("Timed misses don't bring a found tongue's hint back", found(), "2 of 15 tongues found without help");
+      const fresh = fakeStorage();
+      const again = timedRun(HINT_SONG, fresh);
       for (let b = 0; b < 8; b++) strikeAt(again, b % 2 ? "7" : "1", again.due(b));
       tickAt(again, again.due(20));
-      check("Timed hits don't change the fade counts", storage.getItem("tongue-drum:fade"), null);
+      check("Timed hits don't count towards finding a tongue",
+        listTop(setup(fresh).core).found, "0 of 15 tongues found without help");
       const idle = timedRun(HINT_SONG, storage);
       check("a long wait in Timed mode shows no hint either", tickAt(idle, idle.due(0) + 6000).hint, null);
     }
@@ -1792,9 +1838,12 @@
       const run = { t, core, due: (b) => t0 + (4 + b) * BEAT };
       v.steps.forEach((s, b) => strikeAt(run, s.tongues[0].id, run.due(b)));
       v = tickAt(run, run.due(7) + 800);
-      check("a made-up tune's Timed run ends 'on time' like any piece", v.result?.score, "8/8 on time");
+      check("a made-up tune's Timed run ends 'on time', with the tune average",
+        v.result?.score, "8/8 on time · your recent average 8/8");
       v = tickAt(run, run.due(7) + 800 + 1500);
       check("…and makes way for a new tune", [v.playing, v.steps.map(ids).join(" ") !== tune], [false, true]);
+      check("the next Timed tune's average takes in the one before",
+        timedPass({ t, core }, 1).v.result?.score, "7/8 on time · your recent average 7.5/8");
     }
 
     {
@@ -1851,7 +1900,7 @@
       for (let i = 0; i < 30; i++) v = s.core.send({ type: "nudgeTempo", by: 1 });
       check("…and + never above 160", v.overlay.tempo.bpm, 160);
       for (let i = 0; i < 8; i++) s.core.send({ type: "nudgeTempo", by: -1 });
-      v = s.core.send({ type: "setTempoAuto" });
+      v = s.core.send({ type: "tempoAuto" });
       check("Auto hands the tempo back, keeping the set value", v.overlay.tempo, { bpm: 120, locked: false });
       s.core.send({ type: "close" });
       ({ v: after, bpm } = timedPass(s));
@@ -1864,7 +1913,7 @@
       pickNewSong(s.core, TEN);
       s.core.send({ type: "open", what: "gear" });
       for (let i = 0; i < 20; i++) s.core.send({ type: "nudgeTempo", by: 1 });
-      s.core.send({ type: "setTempoAuto" });
+      s.core.send({ type: "tempoAuto" });
       s.core.send({ type: "close" });
       check("at 160 on Auto a good run says nothing about the tempo", timedPass(s).v.result.tempo, null);
       check("…and it stays at 160", timedPass(s).bpm, 160);
@@ -1892,7 +1941,10 @@
       check("the piece list shows a locked tempo as '♩ N 🔒', and nothing for Auto",
         songsIn(list).map((p) => p.tempo), [null, "♩ 70 🔒"]);
       fresh.send({ type: "deleteSong", pieceId: locked });
-      check("deleting a song removes its tempo", JSON.parse(storage.getItem("tongue-drum:tempo")), { [rising]: { bpm: 65, locked: false } });
+      const [, taken] = withSongs(fresh, SHORT); // takes the deleted song's id
+      check("deleting a song removes its tempo: a new song with its id starts at 60 on Auto",
+        [taken, gearOf(taken)], [locked, { bpm: 60, locked: false }]);
+      check("…and leaves the other songs' tempos", gearOf(rising), { bpm: 65, locked: false });
       check("a corrupt saved tempo means 60 on Auto",
         setup(fakeStorage({ "tongue-drum:tempo": "{oops" })).core.send({ type: "open", what: "gear" }).overlay.tempo, { bpm: 60, locked: false });
     }
@@ -1910,7 +1962,7 @@
       s.core.send({ type: "listen" });
       check("Listen's own speed doesn't touch the piece's tempo",
         s.core.send({ type: "open", what: "gear" }).overlay.tempo, { bpm: 65, locked: true });
-      s.core.send({ type: "setTempoAuto" });
+      s.core.send({ type: "tempoAuto" });
       s.core.send({ type: "close" });
       timedPass(s);
       s.core.send({ type: "setTimed", on: false });

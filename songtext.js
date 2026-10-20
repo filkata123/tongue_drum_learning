@@ -59,11 +59,13 @@ function readLine(text) {
 }
 
 // Notes from the two lines that start at the same moment become one chord step, melody first.
+// Both lines on the same tongue at once is one strike, so a single-tongue step.
 function bothSteps(melody, accomp) {
   const byStart = new Map();
   for (const n of [...melody, ...accomp]) {
     if (!byStart.has(n.start)) byStart.set(n.start, []);
-    byStart.get(n.start).push(n.tongue);
+    const tongues = byStart.get(n.start);
+    if (!tongues.includes(n.tongue)) tongues.push(n.tongue);
   }
   return [...byStart].sort(([a], [b]) => a - b).map(([start, tongues]) => ({ start, tongues }));
 }
