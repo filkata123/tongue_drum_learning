@@ -14,9 +14,14 @@ const PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...pars
 // melody line.
 const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
 
+const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
+
+const findPiece = (id) => PIECES.find((p) => p.id === id);
+
 export function createPracticeCore({ storage, clock, random }) {
   const state = {
-    piece: PIECES[0],
+    // The piece last picked, or the first exercise if none was (or it's gone).
+    piece: findPiece(storage.getItem(PIECE_KEY)) ?? PIECES[0],
     playing: false,
     position: 0,
     heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
@@ -25,7 +30,22 @@ export function createPracticeCore({ storage, clock, random }) {
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
+    overlay: null, // null | "pieces"
   };
+
+  // The piece list: Exercises, then My songs (empty until songs can be added).
+  function piecesOverlay() {
+    const entry = (p) => ({ id: p.id, title: p.title, current: p === state.piece, editable: p.group === "my-song", mark: null, tempo: null });
+    return {
+      kind: "pieces",
+      found: "",
+      averages: [],
+      groups: [
+        { title: "Exercises", pieces: PIECES.filter((p) => p.group === "exercise").map(entry) },
+        { title: "My songs", pieces: PIECES.filter((p) => p.group === "my-song").map(entry) },
+      ],
+    };
+  }
 
   function view() {
     const { piece } = state;
@@ -39,6 +59,7 @@ export function createPracticeCore({ storage, clock, random }) {
       position: state.position,
       feedback: state.feedback,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
+      overlay: state.overlay === "pieces" ? piecesOverlay() : null,
     };
   }
 
@@ -82,8 +103,25 @@ export function createPracticeCore({ storage, clock, random }) {
       state.playing = true;
       toFirstStep();
     },
+    open({ what }) {
+      if (what !== "pieces") throw new Error(`Unknown overlay: ${what}`);
+      state.overlay = what;
+    },
+    close() {
+      state.overlay = null;
+    },
+    pick({ pieceId }) {
+      const piece = findPiece(pieceId);
+      if (!piece) throw new Error(`Unknown piece: ${pieceId}`);
+      state.piece = piece;
+      storage.setItem(PIECE_KEY, piece.id);
+      state.overlay = null;
+      // Picking abandons any run: the learner is the one who presses Start.
+      state.playing = false;
+      toFirstStep();
+    },
     strike({ tongue }) {
-      if (!state.playing || state.heard || state.done) return;
+      if (!state.playing || state.heard || state.done || state.overlay) return;
       const target = stepTongues(state.piece)[state.position];
       if (tongue === target) {
         state.heard = true;

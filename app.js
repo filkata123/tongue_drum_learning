@@ -12,7 +12,8 @@ const els = {
   play: $("play"), stage: $("stage"), current: $("current"), next: $("next"),
   melodyName: $("melody-name"), progress: $("progress"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
-  done: $("done"), doneText: $("done-text"),
+  done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -51,7 +52,39 @@ function render(v) {
 
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
+
+  els.restartBtn.textContent = v.playing ? "Restart" : "Start";
+  els.restartBtn.classList.toggle("start", !v.playing);
+
+  els.pieces.hidden = v.overlay?.kind !== "pieces";
+  // Rebuilt only when the list itself changed, so a tap isn't lost to a re-render.
+  if (!els.pieces.hidden && JSON.stringify(v.overlay) !== JSON.stringify(before?.overlay)) renderPieces(v.overlay);
 }
+
+function renderPieces({ groups }) {
+  els.piecesGroups.replaceChildren(...groups.flatMap((g) => {
+    const title = document.createElement("h2");
+    title.textContent = g.title;
+    if (!g.pieces.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "Nothing here yet.";
+      return [title, empty];
+    }
+    return [title, ...g.pieces.map((p) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `piece${p.current ? " current" : ""}`;
+      btn.textContent = p.title;
+      btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
+      return btn;
+    })];
+  }));
+}
+
+els.melodyName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
+els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 
 // --- Audio ---------------------------------------------------------------
 
