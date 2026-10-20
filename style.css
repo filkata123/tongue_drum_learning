@@ -231,6 +231,18 @@ footer {
   cursor: pointer;
 }
 #pieces .piece.current { border-color: #9ca3af; }
+#pieces .song-row { display: flex; gap: 0.5rem; align-items: stretch; margin: 0 0 0.5rem; }
+#pieces .song-row .piece { flex: 1; min-width: 0; margin: 0; }
+#pieces .song-action {
+  font: inherit;
+  font-size: 0.95rem;
+  color: #9ca3af;
+  background: none;
+  border: 2px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0 0.8rem;
+  cursor: pointer;
+}
 #add-song {
   font: inherit;
   font-size: 1.1rem;

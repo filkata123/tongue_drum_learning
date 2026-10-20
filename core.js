@@ -33,6 +33,20 @@ export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...EXERCISE_PIECES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
+  const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
+  // The one place a deleted piece's stored data goes: its song text, and its being the piece last
+  // picked. Anything stored per piece later (part, scores, tempo) must be removed here too.
+  function forgetPiece(id) {
+    songs.splice(songs.findIndex((s) => s.id === id), 1);
+    saveSongs();
+    if (storage.getItem(PIECE_KEY) === id) storage.removeItem(PIECE_KEY);
+  }
+  // Only My songs can be edited or deleted; asking for anything else is a programming error.
+  function findSong(id) {
+    const song = songs.find((s) => s.id === id);
+    if (!song) throw new Error(`Not one of My songs: ${id}`);
+    return song;
+  }
 
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
@@ -46,7 +60,7 @@ export function createPracticeCore({ storage, clock, random }) {
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
     overlay: null, // null | "pieces" | "editor"
-    editor: null, // { text, errors } while the paste box is open
+    editor: null, // { pieceId, text, errors } while the paste box is open; pieceId null = a new song
   };
 
   // The piece list: Exercises, then My songs.
@@ -77,7 +91,7 @@ export function createPracticeCore({ storage, clock, random }) {
       feedback: state.feedback,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       overlay: state.overlay === "pieces" ? piecesOverlay()
-        : state.overlay === "editor" ? { kind: "editor", pieceId: null, ...state.editor, conversionPrompt: conversionPrompt() }
+        : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
         : null,
     };
   }
@@ -122,24 +136,53 @@ export function createPracticeCore({ storage, clock, random }) {
       state.playing = true;
       toFirstStep();
     },
-    open({ what }) {
+    open({ what, pieceId }) {
       if (what !== "pieces" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
+      // Editing a song reopens its saved text; without a pieceId the paste box is for a new song.
+      const song = what === "editor" && pieceId != null ? findSong(pieceId) : null;
       state.overlay = what;
-      if (what === "editor") state.editor = { text: "", errors: [] };
+      if (what === "editor") state.editor = { pieceId: song?.id ?? null, text: song?.text ?? "", errors: [] };
     },
     saveSong({ text }) {
+      // Saves to the song the paste box was opened for, or adds a new one.
+      const pieceId = state.editor?.pieceId ?? null;
       // A bad paste isn't an error: the paste box shows what's wrong, and nothing is saved.
       const errors = checkSongText(text);
       if (errors.length) {
         state.overlay = "editor";
-        state.editor = { text, errors };
+        state.editor = { pieceId, text, errors };
         return;
       }
-      const n = Math.max(0, ...songs.map((s) => Number(s.id.slice("song-".length)) || 0)) + 1;
-      songs.push(mySong({ id: `song-${n}`, text }));
-      storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
+      if (pieceId != null) {
+        const i = songs.indexOf(findSong(pieceId));
+        songs[i] = mySong({ id: pieceId, text });
+        // The current song's notes may have changed, so its run starts over, waiting for Start.
+        if (state.piece.id === pieceId) {
+          state.piece = songs[i];
+          state.playing = false;
+          toFirstStep();
+        }
+      } else {
+        const n = Math.max(0, ...songs.map((s) => Number(s.id.slice("song-".length)) || 0)) + 1;
+        songs.push(mySong({ id: `song-${n}`, text }));
+      }
+      saveSongs();
       state.overlay = "pieces";
       state.editor = null;
+    },
+    deleteSong({ pieceId }) {
+      // The screen asks the learner to confirm first; by now it's decided.
+      forgetPiece(findSong(pieceId).id);
+      // Deleting the current song quietly switches to the first exercise.
+      if (state.piece.id === pieceId) {
+        state.piece = EXERCISE_PIECES[0];
+        state.playing = false;
+        toFirstStep();
+      }
+      if (state.editor?.pieceId === pieceId) {
+        state.overlay = "pieces";
+        state.editor = null;
+      }
     },
     close() {
       // The paste box was opened from the piece list, so closing it goes back there.
