@@ -13,7 +13,9 @@ const els = {
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
-  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
+  editor: $("editor"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
+  songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -63,6 +65,22 @@ function render(v) {
   els.pieces.hidden = v.overlay?.kind !== "pieces";
   // Rebuilt only when the list itself changed, so a tap isn't lost to a re-render.
   if (!els.pieces.hidden && JSON.stringify(v.overlay) !== JSON.stringify(before?.overlay)) renderPieces(v.overlay);
+
+  els.editor.hidden = v.overlay?.kind !== "editor";
+  if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
+}
+
+// The draft in the paste box is the screen's: the core only gives the starting text.
+function renderEditor({ text, errors }, wasOpen) {
+  if (!wasOpen) {
+    els.songText.value = text;
+    els.copyPrompt.textContent = "Copy conversion prompt";
+  }
+  els.songErrors.replaceChildren(...errors.map((e) => {
+    const li = document.createElement("li");
+    li.textContent = e.message;
+    return li;
+  }));
 }
 
 function renderPieces({ groups }) {
@@ -88,6 +106,17 @@ function renderPieces({ groups }) {
 
 els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
 els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.addSong.addEventListener("click", () => render(core.send({ type: "open", what: "editor" })));
+els.editorClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.saveSong.addEventListener("click", () => render(core.send({ type: "saveSong", text: els.songText.value })));
+els.copyPrompt.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(shown.overlay.conversionPrompt);
+    els.copyPrompt.textContent = "Copied ✓";
+  } catch {
+    els.copyPrompt.textContent = "Couldn't copy";
+  }
+});
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 
 // --- Audio ---------------------------------------------------------------
@@ -119,6 +148,7 @@ async function listen(ctx, input) {
   const win = new Float32Array(CONFIG.windowSize);
   const hop = Math.round(ctx.sampleRate / 60);
   let sinceHop = 0, total = 0;
+  let lastReport = ""; // debug: the last strike's three loudest tongues
 
   capture.port.onmessage = ({ data }) => {
     let block = data;
@@ -133,8 +163,17 @@ async function listen(ctx, input) {
         sinceHop = 0;
         const t = (total / ctx.sampleRate) * 1000;
         const strike = listener.process(win, t);
-        // Move the onset from audio time onto the core's clock.
-        if (strike) render(core.send({ type: "strike", tongue: strike.note.id, at: Date.now() - (t - strike.at) }));
+        if (!strike) continue;
+        // Move the onsets from audio time onto the core's clock.
+        const now = Date.now();
+        const clockAt = (at) => now - (t - at);
+        const ranked = strike.ranked.map((r) => ({ ...r, at: clockAt(r.at) }));
+        render(core.send({ type: "strike", tongue: strike.note.id, at: clockAt(strike.at), ranked }));
+        if (DEBUG) {
+          lastReport = `   last strike ${strike.note.id}: ` + strike.ranked.slice(0, 3)
+            .map((r) => `${r.tongue} ${(20 * Math.log10(r.level)).toFixed(0)} dB ${r.at >= strike.at ? "+" : ""}${(r.at - strike.at).toFixed(0)} ms`)
+            .join(" · ");
+        }
       }
     }
   };
@@ -147,7 +186,7 @@ async function listen(ctx, input) {
     const { level, notes, floors, heard } = listener.reading;
     els.levelBar.style.width = `${dbPercent(20 * Math.log10(level), -70, -10)}%`;
     if (DEBUG) {
-      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}`;
+      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}${lastReport}`;
       notes.forEach((p, k) => {
         bars[k].bar.style.height = `${dbPercent(10 * Math.log10(p), -110, -20)}%`;
         bars[k].floor.style.bottom = `${dbPercent(10 * Math.log10(floors[k]), -110, -20)}%`;

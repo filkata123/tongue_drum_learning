@@ -63,6 +63,20 @@
         <button id="pieces-close" type="button" aria-label="Close">✕</button>
       </div>
       <div id="pieces-groups"></div>
+      <button id="add-song" type="button">+ Add song</button>
+    </div>
+
+    <div id="editor" role="dialog" aria-label="Add song" hidden>
+      <div id="editor-head">
+        <span>Add song</span>
+        <button id="editor-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <button id="copy-prompt" type="button">Copy conversion prompt</button>
+      <p class="hint">Paste it into any chatbot with a photo of your sheet, then paste its answer below.</p>
+      <textarea id="song-text" spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="title: …&#10;melody: …&#10;accomp: …"></textarea>
+      <ul id="song-errors"></ul>
+      <button id="save-song" type="button">Save</button>
     </div>
   </main>
 

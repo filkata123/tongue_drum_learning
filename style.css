@@ -231,6 +231,58 @@ footer {
   cursor: pointer;
 }
 #pieces .piece.current { border-color: #9ca3af; }
+#add-song {
+  font: inherit;
+  font-size: 1.1rem;
+  color: #9ca3af;
+  background: none;
+  border: 2px dashed #374151;
+  border-radius: 0.5rem;
+  padding: 0.8rem 1rem;
+  margin: 1.5rem 0 0;
+  width: 100%;
+  cursor: pointer;
+}
+
+/* The paste box */
+#editor {
+  position: absolute;
+  inset: 0;
+  background: #111827;
+  overflow-y: auto;
+  padding: 1rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+#editor[hidden] { display: none; }
+#editor-head { display: flex; justify-content: space-between; align-items: center; color: #9ca3af; font-size: 1.1rem; }
+#editor-close { font: inherit; font-size: 1.4rem; color: inherit; background: none; border: none; cursor: pointer; }
+#editor .hint { margin: 0; }
+#song-text {
+  min-height: 12rem;
+  font-family: ui-monospace, monospace;
+  font-size: 1rem;
+  color: #f9fafb;
+  background: #1f2937;
+  border: 2px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  resize: vertical;
+}
+#song-errors { color: #f87171; margin: 0; padding-left: 1.2rem; }
+#song-errors:empty { display: none; }
+#copy-prompt, #save-song {
+  font: inherit;
+  font-size: 1.1rem;
+  color: #f9fafb;
+  background: #1f2937;
+  border: 2px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0.7rem 1rem;
+  cursor: pointer;
+}
+#save-song { background: #2563eb; border-color: #2563eb; }
 
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
