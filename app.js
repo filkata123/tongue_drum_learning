@@ -19,6 +19,7 @@ const els = {
   gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
   listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
   listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
+  timedSwitch: $("timed-switch"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -28,8 +29,18 @@ function noteHtml(id, cls = "") {
   return `<span class="note ${octave}${cls}">${digit}</span>`;
 }
 
-// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green.
-const stepHtml = (step) => (step ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : "")).join("") : "");
+// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green, and
+// a note missed in a Timed run red.
+const stepHtml = (step) => (step
+  ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : step.missed ? " missed" : "")).join("")
+  : "");
+
+// The finished run's line: the score, then any tongues missed in a Timed run.
+function resultHtml(result) {
+  if (!result) return "";
+  const missed = result.missed.length ? ` · missed ${result.missed.map((id) => noteHtml(id)).join(" ")}` : "";
+  return `${result.score}${missed}`;
+}
 
 const GROUPS = { exercise: "Exercise", "my-song": "My song" };
 const PARTS = { melody: "melody line", accomp: "accompaniment line", both: "both lines" };
@@ -60,9 +71,18 @@ function render(v) {
     els.feedback.innerHTML = `That was ${noteHtml(v.feedback.thatWas)}`;
   }
 
+  // Timed mode: the count-in's numbers, then a pulse on the current step for every beat.
+  els.feedback.classList.toggle("count-in", v.timed.countIn !== null);
+  if (v.timed.countIn !== null) els.feedback.textContent = String(v.timed.countIn);
+  if (before && v.timed.beatSeq !== before.timed.beatSeq) {
+    els.current.classList.remove("beat");
+    void els.current.offsetWidth; // restart the pulse animation
+    els.current.classList.add("beat");
+  }
+
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
-  els.result.textContent = els.doneResult.textContent = v.result?.score ?? "";
+  els.result.innerHTML = els.doneResult.innerHTML = resultHtml(v.result);
 
   els.listenBtn.textContent = v.listen.playing ? "■ Stop" : "▶ Listen";
   els.listenBtn.classList.toggle("playing", v.listen.playing);
@@ -72,6 +92,7 @@ function render(v) {
 
   els.restartBtn.textContent = v.playing ? "Restart" : "Start";
   els.restartBtn.classList.toggle("start", !v.playing);
+  els.timedSwitch.checked = v.timed.on;
   if (v.playing !== before?.playing) keepAwake(v.playing);
 
   els.pieces.hidden = v.overlay?.kind !== "pieces";
@@ -184,6 +205,7 @@ els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send(
 els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
+els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
 els.listenBtn.addEventListener("click", () => render(core.send({ type: "listen" })));
 els.listenSlower.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: -1 })));
 els.listenFaster.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: 1 })));
@@ -211,8 +233,21 @@ function drumNote(ctx, out, tongue, when, ms) {
   });
 }
 
-// Listen's sound. The core says what to play and when, on its clock; a new key replaces whatever
-// was scheduled. Notes already ringing carry on unless the sound stops altogether.
+// A Timed run's count-in click: a short, high tick, well above the drum's notes.
+function click(ctx, out, when) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = 2000;
+  gain.gain.setValueAtTime(0.4, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  osc.connect(gain).connect(out);
+  osc.start(when);
+  osc.stop(when + 0.05);
+  return { osc, gain, when };
+}
+
+// Listen's notes and the Timed count-in. The core says what to play and when, on its clock; a new
+// key replaces whatever was scheduled. Notes already ringing carry on unless the sound stops altogether.
 let voices = [];
 function playSound(sound) {
   if (!audio) return;
@@ -230,8 +265,9 @@ function playSound(sound) {
   if (!sound) return;
   const offset = now - Date.now() / 1000; // clock ms → audio seconds
   for (const e of sound.events) {
-    if (e.kind !== "note") continue;
-    voices.push(...drumNote(audio, audio.destination, e.tongue, Math.max(now, e.at / 1000 + offset), e.ms));
+    const when = Math.max(now, e.at / 1000 + offset);
+    if (e.kind === "note") voices.push(...drumNote(audio, audio.destination, e.tongue, when, e.ms));
+    if (e.kind === "click") voices.push(click(audio, audio.destination, when));
   }
 }
 
