@@ -186,6 +186,90 @@
       check("no chord asks for one tongue twice", twoLine.every((p) => p.both.every((s) => new Set(s.tongues).size === s.tongues.length)), true);
     }
 
+    // The piece list.
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      let v = core.send({ type: "pick", pieceId: "simple-phrase" });
+      check("picking a piece makes it the current piece", v.piece.title, "Simple phrase");
+      v = setup(storage).core.send({ type: "tick" });
+      check("the current piece persists across a fresh core on the same storage", v.piece.title, "Simple phrase");
+      v = setup().core.send({ type: "tick" });
+      check("a fresh device's current piece is the first exercise", v.piece.title, "D major scale");
+      v = setup(fakeStorage({ "tongue-drum:piece": "no-such-piece" })).core.send({ type: "tick" });
+      check("a saved piece that no longer exists falls back to the first exercise", v.piece.title, "D major scale");
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "strike", tongue: "5", at: t.now }); // a miss on step 2
+      let v = core.send({ type: "pick", pieceId: "up-and-down" });
+      check("picking a piece mid-run stops the run on its first step, with nothing heard",
+        [v.piece.title, v.playing, v.position, v.feedback, v.steps.some((s) => s.tongues[0].heard)],
+        ["Up and down", false, 0, null, false]);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("strikes after picking are ignored until Start", v.steps[0].tongues[0].heard, false);
+      v = core.send({ type: "start" });
+      check("Start plays the picked piece from step 1",
+        [v.piece.title, v.playing, v.position, v.steps.map(ids).join(" ")], ["Up and down", true, 0, "1 3 5 7 5 3 1"]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      playThrough(t, core);
+      let v = core.send({ type: "pick", pieceId: "classic-step" });
+      check("picking while done is showing clears done", [v.done, v.playing], [null, false]);
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      check("the old piece's restart doesn't fire after a pick", [v.piece.title, v.playing, v.done], ["Classic step", false, null]);
+    }
+
+    {
+      const { core } = setup();
+      check("no overlay is open at first", core.send({ type: "tick" }).overlay, null);
+      core.send({ type: "pick", pieceId: "simple-phrase" });
+      let v = core.send({ type: "open", what: "pieces" });
+      check("the piece list has two groups, Exercises then My songs",
+        [v.overlay.kind, v.overlay.groups.map((g) => g.title)], ["pieces", ["Exercises", "My songs"]]);
+      const [exercises, mySongs] = v.overlay.groups;
+      check("Exercises lists every exercise in order",
+        exercises.pieces.map((p) => p.title).slice(0, 3), ["D major scale", "Simple phrase", "Up and down"]);
+      check("My songs is empty until a song is added", mySongs.pieces, []);
+      check("only the current piece is marked current",
+        exercises.pieces.filter((p) => p.current).map((p) => p.id), ["simple-phrase"]);
+      check("exercises are read-only", exercises.pieces.some((p) => p.editable), false);
+      v = core.send({ type: "close" });
+      check("close shuts the piece list and keeps the current piece", [v.overlay, v.piece.title], [null, "Simple phrase"]);
+      core.send({ type: "open", what: "pieces" });
+      v = core.send({ type: "pick", pieceId: "upper-octave" });
+      check("picking a piece shuts the list, back to the main screen", [v.overlay, v.piece.title], [null, "Upper octave"]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      let v = core.send({ type: "open", what: "pieces" });
+      check("opening the list mid-run doesn't stop the run", v.playing, true);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("strikes are ignored while the list is open", [v.steps[0].tongues[0].heard, v.feedback], [false, null]);
+      core.send({ type: "close" });
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("closing the list carries on with the run", [v.playing, v.steps[0].tongues[0].heard], [true, true]);
+    }
+
+    {
+      const { core } = setup();
+      const v = core.send({ type: "pick", pieceId: "bells-two-lines" });
+      check("a two-line piece plays its melody line in Step mode", v.steps.map(ids).join(" "), "5 3 5 3 1");
+      let threw = false;
+      try { core.send({ type: "pick", pieceId: "no-such-piece" }); } catch { threw = true; }
+      check("picking an unknown piece throws", threw, true);
+    }
+
     {
       const { t, core } = setup();
       const a = core.send({ type: "start" });
