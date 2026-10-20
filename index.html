@@ -107,6 +107,15 @@
       <span>Location hints</span>
     </label>
     <p class="hint">When you're stuck, show where the note is on the drum.</p>
+    <!-- The current piece's tempo: −/+ lock it, Auto lets it rise after good Timed runs. -->
+    <div id="tempo-row">
+      <span>Tempo</span>
+      <button id="tempo-slower" type="button" aria-label="Slower">−</button>
+      <span id="tempo-bpm"></span>
+      <button id="tempo-faster" type="button" aria-label="Faster">+</button>
+      <button id="tempo-auto" type="button" aria-pressed="false">Auto</button>
+    </div>
+    <p class="hint">Rises by 5 after a Timed run with 9 in 10 notes on time, unless you set it yourself.</p>
   </div>
 
   <script type="module" src="app.js"></script>

@@ -1096,7 +1096,7 @@
       const storage = fakeStorage();
       const { core } = setup(storage);
       let v = core.send({ type: "open", what: "gear" });
-      check("the gear opens with Location hints on", v.overlay, { kind: "gear", hints: true, tempo: null });
+      check("the gear opens with Location hints on", v.overlay, { kind: "gear", hints: true, tempo: { bpm: 60, locked: false } });
       v = core.send({ type: "setHints", on: false });
       check("the switch turns Location hints off", v.overlay.hints, false);
       check("closing the gear goes back to the main screen", core.send({ type: "close" }).overlay, null);
@@ -1800,6 +1800,121 @@
     {
       const { core } = setup();
       check("Start with Timed off is Step mode: no count-in, no sound", (({ timed, sound }) => [timed.countIn, sound])(core.send({ type: "start" })), [null, null]);
+    }
+
+    // Per-piece tempo. A Timed pass of the current piece from Start, hitting every note on its beat
+    // but the last `skip`. Its tempo is read off the count-in clicks.
+    const TEN = "title: Ten\nmelody: 1 2 3 5 6 1 2 3 5 6";
+    function timedPass({ t, core }, skip = 0) {
+      core.send({ type: "setTimed", on: true });
+      let v = core.send({ type: "start" });
+      const [c0, c1] = v.sound.events;
+      const beat = c1.at - c0.at;
+      const due = (b) => c0.at + (4 + b) * beat;
+      const run = { t, core };
+      const tongues = v.steps.map((s) => s.tongues[0].id);
+      tongues.forEach((tg, b) => { if (b < tongues.length - skip) strikeAt(run, tg, due(b)); });
+      v = tickAt(run, due(tongues.length - 1) + beat / 2 + 301); // the last note's verdict ends the run
+      tickAt(run, t.now + 1500);
+      return { v, bpm: Math.round(60000 / beat) };
+    }
+
+    {
+      const s = setup();
+      pickNewSong(s.core, TEN);
+      let { v, bpm } = timedPass(s, 1);
+      check("a piece's first Timed run is at 60", bpm, 60);
+      check("on Auto, a run with 9 in 10 hit raises the tempo by 5",
+        v.result, { score: "9/10 on time", missed: ["6"], tempo: "Tempo 60 → 65 next time" });
+      ({ v, bpm } = timedPass(s, 2));
+      check("the next run is at the new tempo", bpm, 65);
+      check("a run below 9 in 10 leaves the tempo as it is", v.result, { score: "8/10 on time", missed: ["5", "6"], tempo: null });
+      check("…for the run after too", timedPass(s).bpm, 65);
+    }
+
+    {
+      const s = setup();
+      pickNewSong(s.core, TEN);
+      const gear = () => s.core.send({ type: "open", what: "gear" }).overlay.tempo;
+      check("the gear shows the current piece's tempo, on Auto", gear(), { bpm: 60, locked: false });
+      let v = s.core.send({ type: "nudgeTempo", by: 1 });
+      check("tapping + raises it by 5 and locks it", v.overlay.tempo, { bpm: 65, locked: true });
+      s.core.send({ type: "close" });
+      let { v: after, bpm } = timedPass(s);
+      check("a locked tempo is the one played", bpm, 65);
+      check("a locked tempo doesn't rise after a run with every note hit", after.result.tempo, null);
+      check("…nor for the run after", timedPass(s).bpm, 65);
+      gear();
+      for (let i = 0; i < 5; i++) v = s.core.send({ type: "nudgeTempo", by: -1 });
+      check("tapping − lowers it by 5 a tap, still locked", v.overlay.tempo, { bpm: 40, locked: true });
+      check("…but never below 40", s.core.send({ type: "nudgeTempo", by: -1 }).overlay.tempo.bpm, 40);
+      for (let i = 0; i < 30; i++) v = s.core.send({ type: "nudgeTempo", by: 1 });
+      check("…and + never above 160", v.overlay.tempo.bpm, 160);
+      for (let i = 0; i < 8; i++) s.core.send({ type: "nudgeTempo", by: -1 });
+      v = s.core.send({ type: "setTempoAuto" });
+      check("Auto hands the tempo back, keeping the set value", v.overlay.tempo, { bpm: 120, locked: false });
+      s.core.send({ type: "close" });
+      ({ v: after, bpm } = timedPass(s));
+      check("on Auto the run is at the set value", bpm, 120);
+      check("…and the tempo carries on rising from it", after.result.tempo, "Tempo 120 → 125 next time");
+    }
+
+    {
+      const s = setup();
+      pickNewSong(s.core, TEN);
+      s.core.send({ type: "open", what: "gear" });
+      for (let i = 0; i < 20; i++) s.core.send({ type: "nudgeTempo", by: 1 });
+      s.core.send({ type: "setTempoAuto" });
+      s.core.send({ type: "close" });
+      check("at 160 on Auto a good run says nothing about the tempo", timedPass(s).v.result.tempo, null);
+      check("…and it stays at 160", timedPass(s).bpm, 160);
+    }
+
+    {
+      const storage = fakeStorage();
+      const s = setup(storage);
+      const [rising, locked] = withSongs(s.core, TEN, SHORT);
+      s.core.send({ type: "pick", pieceId: rising });
+      timedPass(s);
+      s.core.send({ type: "pick", pieceId: locked });
+      s.core.send({ type: "open", what: "gear" });
+      s.core.send({ type: "nudgeTempo", by: 1 });
+      s.core.send({ type: "nudgeTempo", by: 1 });
+      const fresh = setup(storage).core;
+      const gearOf = (id) => {
+        fresh.send({ type: "pick", pieceId: id });
+        return fresh.send({ type: "open", what: "gear" }).overlay.tempo;
+      };
+      check("a risen tempo survives a fresh core on the same storage", gearOf(rising), { bpm: 65, locked: false });
+      check("…and so do a locked tempo and its lock", gearOf(locked), { bpm: 70, locked: true });
+      check("each piece keeps its own tempo", gearOf(EXERCISES[0].id), { bpm: 60, locked: false });
+      const list = fresh.send({ type: "open", what: "pieces" });
+      check("the piece list shows a locked tempo as '♩ N 🔒', and nothing for Auto",
+        songsIn(list).map((p) => p.tempo), [null, "♩ 70 🔒"]);
+      fresh.send({ type: "deleteSong", pieceId: locked });
+      check("deleting a song removes its tempo", JSON.parse(storage.getItem("tongue-drum:tempo")), { [rising]: { bpm: 65, locked: false } });
+      check("a corrupt saved tempo means 60 on Auto",
+        setup(fakeStorage({ "tongue-drum:tempo": "{oops" })).core.send({ type: "open", what: "gear" }).overlay.tempo, { bpm: 60, locked: false });
+    }
+
+    {
+      const s = setup();
+      pickNewSong(s.core, LISTEN_SONG);
+      s.core.send({ type: "open", what: "gear" });
+      s.core.send({ type: "nudgeTempo", by: 1 });
+      s.core.send({ type: "close" });
+      let v = s.core.send({ type: "listen" });
+      check("Listen starts at the piece's locked tempo", v.listen, { playing: true, speed: 65 });
+      s.core.send({ type: "nudgeListenSpeed", by: 1 });
+      s.core.send({ type: "nudgeListenSpeed", by: 1 });
+      s.core.send({ type: "listen" });
+      check("Listen's own speed doesn't touch the piece's tempo",
+        s.core.send({ type: "open", what: "gear" }).overlay.tempo, { bpm: 65, locked: true });
+      s.core.send({ type: "setTempoAuto" });
+      s.core.send({ type: "close" });
+      timedPass(s);
+      s.core.send({ type: "setTimed", on: false });
+      check("Listen starts at the piece's tempo on Auto too, once it has risen", s.core.send({ type: "listen" }).listen.speed, 70);
     }
 
     const failed = results.filter((r) => !r.ok).length;
