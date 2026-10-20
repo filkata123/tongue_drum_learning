@@ -582,6 +582,133 @@
       check("an unknown command throws", threw, true);
     }
 
+    // The Location hint. `1` sits on the drum's right half, `7` and `5` on its left.
+    function playSong(text, storage) {
+      const s = setup(storage);
+      s.core.send({ type: "open", what: "editor" });
+      const v = s.core.send({ type: "saveSong", text });
+      s.core.send({ type: "pick", pieceId: songsIn(v).at(-1).id });
+      s.core.send({ type: "start" });
+      return s;
+    }
+    const HINT_SONG = "title: Hint test\nmelody: 1 7 1 7 1 7 1 7";
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      let v = core.send({ type: "tick" });
+      check("a step starts with no hint", v.hint, null);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("one miss shows only 'That was', no hint", [v.feedback.thatWas, v.hint], ["3", null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("the 2nd miss shows the target's half with the target lit",
+        v.hint, { half: "right", lit: ["1"], wrong: "3" });
+      v = core.send({ type: "strike", tongue: "7", at: t.now });
+      check("a miss on the other half still shows the target's half, without the wrong tongue",
+        [v.feedback.thatWas, v.hint], ["7", { half: "right", lit: ["1"], wrong: null }]);
+      t.now += 20000;
+      check("the hint stays while the step isn't hit", core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      v = core.send({ type: "tick" });
+      check("the next step starts with no hint", [v.position, v.hint], [1, null]);
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a left-half target shows the left half", v.hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 4999;
+      check("no hint just before 5 s with no strike", core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check("the hint appears after 5 s with no strike", core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "tick" }); // on step 2 now
+      t.now += 3000;
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      t.now += 4999;
+      check("a miss starts the 5 s over", core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check("5 s after the miss, the hint appears, still naming nothing on the other half",
+        core.send({ type: "tick" }).hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = setup();
+      t.now += 60000;
+      check("no hint before Start, however long you wait", core.send({ type: "tick" }).hint, null);
+    }
+
+    // The fade. Strikes a tongue and waits out the hit flash.
+    function strikeAndWait(t, core, tongue) {
+      core.send({ type: "strike", tongue, at: t.now });
+      t.now += 300;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = playSong(HINT_SONG, storage);
+      for (const tongue of ["1", "7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 60000;
+      let v = core.send({ type: "tick" });
+      check("after 3 unaided hits, the hint stops appearing for that tongue", [v.position, v.hint], [6, null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a miss on a faded tongue shows only 'That was'", [v.feedback.thatWas, v.hint], ["3", null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a miss on a faded tongue brings its hint back", v.hint, { half: "right", lit: ["1"], wrong: "3" });
+
+      const fresh = playSong(HINT_SONG, storage);
+      fresh.t.now += 4000;
+      strikeAndWait(fresh.t, fresh.core, "1");
+      fresh.t.now += 60000;
+      v = fresh.core.send({ type: "tick" });
+      check("fade counts survive a fresh core on the same storage", [v.position, v.hint], [1, null]);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      strikeAndWait(t, core, "1"); // after the hint appeared
+      for (const tongue of ["7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 5000;
+      check("a hit after the hint appeared doesn't count towards the fade",
+        core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      strikeAndWait(t, core, "1");
+      strikeAndWait(t, core, "7");
+      core.send({ type: "strike", tongue: "3", at: t.now }); // one miss, no hint yet
+      for (const tongue of ["1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 5000;
+      check("a miss resets the run of unaided hits",
+        core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      check("the hint is showing before Restart", core.send({ type: "tick" }).hint === null, false);
+      check("Restart takes the hint away", core.send({ type: "start" }).hint, null);
+      t.now += 5000;
+      core.send({ type: "pick", pieceId: "d-major-scale" });
+      t.now += 60000;
+      check("picking a piece takes the hint away until Start", core.send({ type: "tick" }).hint, null);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG, fakeStorage({ "tongue-drum:fade": "{oops" }));
+      t.now += 5000;
+      check("corrupt fade counts mean no tongue has faded", core.send({ type: "tick" }).hint?.lit, ["1"]);
+    }
+
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
     window.testResults = { failed, out: out.textContent };

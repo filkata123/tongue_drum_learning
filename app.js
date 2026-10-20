@@ -1,5 +1,5 @@
 import { createPracticeCore } from "./core.js";
-import { DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
+import { DRUM_MAP, DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
 import { CONFIG, NoteListener } from "./pitch.js";
 
 const params = new URLSearchParams(location.search);
@@ -9,7 +9,7 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 const $ = (id) => document.getElementById(id);
 const els = {
   start: $("start"), startBtn: $("start-btn"), startError: $("start-error"),
-  play: $("play"), stage: $("stage"), current: $("current"), next: [...$("next").children],
+  play: $("play"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
@@ -45,6 +45,8 @@ function render(v) {
   // Always three next slots, so the step window never grows or shifts near the end.
   els.next.forEach((el, i) => { el.innerHTML = stepHtml(v.steps[v.position + 1 + i]); });
 
+  if (JSON.stringify(v.hint) !== JSON.stringify(before?.hint)) renderHint(v.hint);
+
   if (!v.feedback) {
     els.stage.classList.remove("miss");
     els.feedback.textContent = "";
@@ -68,6 +70,21 @@ function render(v) {
 
   els.editor.hidden = v.overlay?.kind !== "editor";
   if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
+}
+
+// The Location hint: the half of the drum map holding the target, with the target lit and a
+// wrong tongue on that half marked.
+function renderHint(hint) {
+  if (!hint) {
+    els.hint.replaceChildren();
+    return;
+  }
+  const tongues = DRUM_NOTES.map(({ id }) => {
+    const cls = hint.lit.includes(id) ? " lit" : id === hint.wrong ? " wrong" : "";
+    const [x, y] = DRUM_MAP[id];
+    return `<span class="tongue${cls}" style="left:${x}%;top:${y}%">${noteHtml(id)}</span>`;
+  });
+  els.hint.innerHTML = `<div class="half ${hint.half}"><div class="drum">${tongues.join("")}</div></div>`;
 }
 
 // The draft in the paste box is the screen's: the core only gives the starting text.

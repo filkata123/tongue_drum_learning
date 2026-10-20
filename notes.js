@@ -20,6 +20,21 @@ export const DRUM_NOTES = [
 
 export const NOTE_BY_ID = Object.fromEntries(DRUM_NOTES.map((n) => [n.id, n]));
 
+// The drum map: where each tongue sits on the real drum, as [x%, y%] of the drum, with the player
+// at the bottom. Tongue centres were read off the learner's photo (in its pixels, the drum's centre
+// at 552,352 with radii 422 × 328) on the prototype/main-screen branch, as confirmed in #17.
+const PHOTO = {
+  "˙3": [553, 50], "˙2": [325, 125], "2": [450, 95], "3": [655, 95], "˙1": [780, 125],
+  "_7": [330, 205], "1": [800, 205], "_3": [556, 240], "7": [230, 310], "6": [880, 310],
+  "_5": [330, 400], "_6": [790, 390], "_4": [560, 490], "5": [400, 535], "4": [720, 530],
+};
+export const DRUM_MAP = Object.fromEntries(Object.entries(PHOTO).map(([id, [x, y]]) =>
+  [id, [50 + ((x - 552) / 422) * 45, 50 + ((y - 352) / 328) * 45]]));
+
+// The half of the drum a tongue sits in: "left" or "right" as the player sees it. The centre
+// tongues fall just right of the middle line; the hint shows ~65% of the drum, so they're never cut.
+export const halfOf = (id) => (DRUM_MAP[id][0] <= 50 ? "left" : "right");
+
 // The built-in exercises, written in song text (see songtext.js). Read-only; only exercises and
 // public-domain or made-up tunes belong here, since the repo is public.
 export const EXERCISES = [
