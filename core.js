@@ -47,6 +47,9 @@ const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line piec
 const HINTS_KEY = "tongue-drum:hints"; // the gear's "Location hints" switch: true | false
 // Cold-run scores: { [pieceId]: { [part]: { [day]: [hits, steps] } } }; a one-line piece's go under "melody"
 const SCORES_KEY = "tongue-drum:scores";
+// Made-up tune scores, latest last: { [exerciseId]: [[hits, steps], …] }, at most RECENT_TUNES each
+const TUNES_KEY = "tongue-drum:tunes";
+const RECENT_TUNES = 10; // a made-up tune's average is over this many of its latest runs
 
 // The local calendar day of a clock time, as "2026-10-20", so days sort as text.
 function dayOf(ms) {
@@ -104,11 +107,13 @@ export function createPracticeCore({ storage, clock, random }) {
   }
 
   // Cold runs: the first finished run of a piece in one part on a day is scored and saved. Later
-  // runs that day are only shown. Returns the finished run's result line.
+  // runs that day are only shown. Made-up tunes have their own rule (`scoreTune`). Returns the
+  // finished run's result line.
   const scores = loadObject(storage, SCORES_KEY);
   const saveScores = () => storage.setItem(SCORES_KEY, JSON.stringify(scores));
   function scoreRun(at) {
     const run = [state.firstStrikeHits, steps().length];
+    if (state.piece.row) return scoreTune(run);
     const days = ((scores[state.piece.id] ??= {})[state.part ?? "melody"] ??= {});
     const today = dayOf(at);
     if (today in days) return `again: ${run.join("/")}`;
@@ -116,6 +121,18 @@ export function createPracticeCore({ storage, clock, random }) {
     days[today] = run;
     saveScores();
     return `First run today: ${run.join("/")}` + (before ? ` · last time ${days[before].join("/")}` : "");
+  }
+
+  // Every made-up tune is a cold run: each finished one is saved under its exercise, and its line
+  // adds the average of that exercise's latest runs (this one included) once there's more than one.
+  const tunes = loadObject(storage, TUNES_KEY);
+  function scoreTune(run) {
+    const saved = Array.isArray(tunes[state.piece.id]) ? tunes[state.piece.id] : [];
+    const recent = tunes[state.piece.id] = [...saved, run].slice(-RECENT_TUNES);
+    storage.setItem(TUNES_KEY, JSON.stringify(tunes));
+    if (recent.length === 1) return run.join("/");
+    const mean = (i) => Math.round((recent.reduce((sum, r) => sum + r[i], 0) / recent.length) * 10) / 10;
+    return `${run.join("/")} · your recent average ${mean(0)}/${mean(1)}`;
   }
 
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
