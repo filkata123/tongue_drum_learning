@@ -14,7 +14,7 @@ const els = {
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
-  editor: $("editor"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
+  editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
 };
 
@@ -88,7 +88,8 @@ function renderHint(hint) {
 }
 
 // The draft in the paste box is the screen's: the core only gives the starting text.
-function renderEditor({ text, errors }, wasOpen) {
+function renderEditor({ pieceId, text, errors }, wasOpen) {
+  els.editorTitle.textContent = pieceId ? "Edit song" : "Add song";
   if (!wasOpen) {
     els.songText.value = text;
     els.copyPrompt.textContent = "Copy conversion prompt";
@@ -116,9 +117,28 @@ function renderPieces({ groups }) {
       btn.className = `piece${p.current ? " current" : ""}`;
       btn.textContent = p.title;
       btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
-      return btn;
+      if (!p.editable) return btn;
+      // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
+      const row = document.createElement("div");
+      row.className = "song-row";
+      const edit = smallButton("Edit", `Edit ${p.title}`, () => render(core.send({ type: "open", what: "editor", pieceId: p.id })));
+      const del = smallButton("Delete", `Delete ${p.title}`, () => {
+        if (confirm(`Delete "${p.title}"? This can't be undone.`)) render(core.send({ type: "deleteSong", pieceId: p.id }));
+      });
+      row.append(btn, edit, del);
+      return row;
     })];
   }));
+}
+
+function smallButton(text, label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "song-action";
+  btn.textContent = text;
+  btn.setAttribute("aria-label", label);
+  btn.addEventListener("click", onClick);
+  return btn;
 }
 
 els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
