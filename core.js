@@ -12,8 +12,10 @@ const HINT_IDLE_MS = 5000; // …or after this long with no strike, whichever co
 const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's hint retires
 const CHORD_MS = 100;      // a chord's tongues must each start sounding this close to the strike
 const RING_ON_MS = 1500;   // the step just played may still ring this long after it was hit
-const DEFAULT_TEMPO = 60;  // beats per minute, until each piece keeps its own tempo (#39)
-const LISTEN_SPEEDS = { min: 40, max: 160, step: 5 }; // Listen's −/+, in beats per minute
+const DEFAULT_TEMPO = 60;  // a piece's tempo in beats per minute, until it rises or is set
+const TEMPOS = { min: 40, max: 160, step: 5 }; // a piece's tempo, the gear's −/+ and each rise
+const RISE_AT = 0.9;       // on Auto, a Timed run with this share of notes on time raises the tempo
+const LISTEN_SPEEDS = TEMPOS; // Listen's −/+, in beats per minute
 const COUNT_IN = 4;        // a Timed run counts in with this many clicks, a beat apart
 const LATE_MS = 300;       // a strike can reach the core this long after its onset and still count
 
@@ -52,6 +54,8 @@ const TIMED_KEY = "tongue-drum:timed"; // the "Timed" switch beside Start: true 
 const SCORES_KEY = "tongue-drum:scores";
 // Made-up tune scores, latest last: { [exerciseId]: [[hits, steps], …] }, at most RECENT_TUNES each
 const TUNES_KEY = "tongue-drum:tunes";
+// Each piece's tempo: { [pieceId]: { bpm, locked } }; a piece with none saved is at DEFAULT_TEMPO, on Auto
+const TEMPOS_KEY = "tongue-drum:tempo";
 const RECENT_TUNES = 10; // a made-up tune's average is over this many of its latest runs
 
 // The local calendar day of a clock time, as "2026-10-20", so days sort as text.
@@ -98,9 +102,27 @@ export function createPracticeCore({ storage, clock, random }) {
   const practise = (piece) => piece?.row
     ? { ...piece, ...parseSongText(`title: ${piece.title}\nmelody: ${makeUpTune(piece.row, random).join(" ")}`) }
     : piece;
-  // A piece's tempo, for Timed runs and Listen. Every piece is at the default until #39 keeps one
-  // per piece, rising after good runs.
-  const tempoOf = () => DEFAULT_TEMPO;
+  // Each piece's tempo, for Timed runs and Listen: the saved one, or the default if none was saved
+  // (or it's corrupt). A made-up tune's is kept under its exercise.
+  const tempos = loadObject(storage, TEMPOS_KEY);
+  const saveTempos = () => storage.setItem(TEMPOS_KEY, JSON.stringify(tempos));
+  const inRange = (bpm) => Number.isFinite(bpm) && bpm >= TEMPOS.min && bpm <= TEMPOS.max;
+  const tempoOf = (piece) => (inRange(tempos[piece.id]?.bpm) ? tempos[piece.id].bpm : DEFAULT_TEMPO);
+  const lockedOf = (piece) => tempos[piece.id]?.locked === true;
+  function setTempo(piece, bpm, locked) {
+    tempos[piece.id] = { bpm, locked };
+    saveTempos();
+  }
+  // On Auto, a Timed run with enough notes on time takes the tempo up a step for the next run.
+  // Returns the finish line's tempo part, or null if the tempo stayed.
+  function riseTempo(hits, notes) {
+    const { piece } = state;
+    const from = tempoOf(piece);
+    const to = Math.min(TEMPOS.max, from + TEMPOS.step);
+    if (lockedOf(piece) || hits < RISE_AT * notes || to === from) return null;
+    setTempo(piece, to, false);
+    return `Tempo ${from} → ${to} next time`;
+  }
   const fade = loadObject(storage, FADE_KEY); // no saved counts means no tongue has faded yet
   let hintsOn = loadHints(storage);
   let timedOn = loadTimed(storage); // Start begins a Timed run rather than Step mode
@@ -153,8 +175,12 @@ export function createPracticeCore({ storage, clock, random }) {
 
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
   // The one place a deleted piece's stored data goes: its song text, its being the piece last
-  // picked, its part and its scores. Anything stored per piece later (tempo) must be removed here too.
+  // picked, its part, its tempo and its scores. Anything else stored per piece must be removed here too.
   function forgetPiece(id) {
+    if (id in tempos) {
+      delete tempos[id];
+      saveTempos();
+    }
     songs.splice(songs.findIndex((s) => s.id === id), 1);
     saveSongs();
     if (storage.getItem(PIECE_KEY) === id) storage.removeItem(PIECE_KEY);
@@ -222,7 +248,9 @@ export function createPracticeCore({ storage, clock, random }) {
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
     const entry = (p) => ({
-      id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: markOf(p), tempo: null,
+      id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: markOf(p),
+      // Only a locked tempo is listed: you set it, so you can see it's kept.
+      tempo: lockedOf(p) ? `♩ ${tempoOf(p)} 🔒` : null,
     });
     return {
       kind: "pieces",
@@ -284,7 +312,7 @@ export function createPracticeCore({ storage, clock, random }) {
       timed: { on: timedOn, countIn: state.timed?.countIn ?? null, beatSeq: state.beatSeq },
       sound: state.listen ? listenSound() : state.timed?.sound ?? null,
       overlay: state.overlay === "pieces" ? piecesOverlay()
-        : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: null }
+        : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: { bpm: tempoOf(piece), locked: lockedOf(piece) } }
         : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
         : null,
     };
@@ -464,7 +492,8 @@ export function createPracticeCore({ storage, clock, random }) {
     state.done = true;
     state.doneSeq++;
     scoreRun(at);
-    state.result = { score: `${state.firstStrikeHits}/${notes.length} on time`, missed: [...new Set(red)], tempo: null };
+    const hits = state.firstStrikeHits;
+    state.result = { score: `${hits}/${notes.length} on time`, missed: [...new Set(red)], tempo: riseTempo(hits, notes.length) };
     // A finished made-up tune makes way for a new one, as in Step mode.
     schedule(DONE_MS, at, (from) => {
       state.piece = practise(findPiece(state.piece.id));
@@ -603,6 +632,16 @@ export function createPracticeCore({ storage, clock, random }) {
       // Takes effect from the next Start; a run under way carries on as it began.
       timedOn = Boolean(on);
       storage.setItem(TIMED_KEY, JSON.stringify(timedOn));
+    },
+    nudgeTempo({ by }) {
+      // The gear's −/+ for the current piece: setting a tempo yourself locks it. It takes effect
+      // from the next run.
+      const bpm = Math.min(TEMPOS.max, Math.max(TEMPOS.min, tempoOf(state.piece) + Math.sign(by) * TEMPOS.step));
+      setTempo(state.piece, bpm, true);
+    },
+    setTempoAuto() {
+      // The app takes the tempo back from where it was set, rather than from the default.
+      setTempo(state.piece, tempoOf(state.piece), false);
     },
     pick({ pieceId }) {
       const piece = findPiece(pieceId);

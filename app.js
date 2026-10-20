@@ -20,6 +20,7 @@ const els = {
   listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
   listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
   timedSwitch: $("timed-switch"),
+  tempoBpm: $("tempo-bpm"), tempoSlower: $("tempo-slower"), tempoFaster: $("tempo-faster"), tempoAuto: $("tempo-auto"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -35,11 +36,13 @@ const stepHtml = (step) => (step
   ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : step.missed ? " missed" : "")).join("")
   : "");
 
-// The finished run's line: the score, then any tongues missed in a Timed run.
+// The finished run's line: the score, then any tongues missed in a Timed run, and whether the
+// tempo rose.
 function resultHtml(result) {
   if (!result) return "";
   const missed = result.missed.length ? ` · missed ${result.missed.map((id) => noteHtml(id)).join(" ")}` : "";
-  return `${result.score}${missed}`;
+  const tempo = result.tempo ? ` · ${result.tempo}` : "";
+  return `${result.score}${missed}${tempo}`;
 }
 
 const GROUPS = { exercise: "Exercise", "my-song": "My song" };
@@ -103,7 +106,11 @@ function render(v) {
   if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
 
   els.gear.hidden = v.overlay?.kind !== "gear";
-  if (!els.gear.hidden) els.hintsSwitch.checked = v.overlay.hints;
+  if (!els.gear.hidden) {
+    els.hintsSwitch.checked = v.overlay.hints;
+    els.tempoBpm.textContent = v.overlay.tempo.locked ? `${v.overlay.tempo.bpm} 🔒` : v.overlay.tempo.bpm;
+    els.tempoAuto.setAttribute("aria-pressed", String(!v.overlay.tempo.locked));
+  }
 }
 
 // The Location hint: the half of the drum map holding the target (or the whole drum for a chord
@@ -163,6 +170,12 @@ function renderPieces({ found, averages, groups }) {
         mark.textContent = p.mark;
         btn.append(mark);
       }
+      if (p.tempo) {
+        const tempo = document.createElement("span");
+        tempo.className = "mark";
+        tempo.textContent = p.tempo;
+        btn.append(tempo);
+      }
       btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
       if (!p.editable) return btn;
       // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
@@ -204,6 +217,9 @@ els.copyPrompt.addEventListener("click", async () => {
 els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send({ type: "open", what: "gear" }))));
 els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
+els.tempoSlower.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: -1 })));
+els.tempoFaster.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: 1 })));
+els.tempoAuto.addEventListener("click", () => render(core.send({ type: "setTempoAuto" })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
 els.listenBtn.addEventListener("click", () => render(core.send({ type: "listen" })));
