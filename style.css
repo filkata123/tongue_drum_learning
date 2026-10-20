@@ -104,6 +104,9 @@ header {
   border-radius: 50%; background: #1f2937; border: 2px solid #374151;
 }
 #hint .half.right .drum { left: -53.8%; }
+/* A chord whose tongues sit on different halves shows the whole drum. */
+#hint .half.whole { aspect-ratio: 1; }
+#hint .half.whole .drum { width: 100%; }
 #hint .tongue {
   position: absolute; width: 13%; height: 13%; transform: translate(-50%, -50%);
   border-radius: 40%; background: #374151; color: #6b7280;

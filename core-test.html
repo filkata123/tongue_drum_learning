@@ -114,11 +114,19 @@
       check("right tongue moves on after the flash", [v.position, v.steps[1].tongues[0].heard], [1, false]);
     }
 
-    // Hits every remaining step of the current piece, waiting out each flash.
+    // A strike as the detector reports it: `sounding` is [tongue, onset ms from now], loudest first,
+    // and the detector's single-note verdict is the loudest.
+    function report(t, ...sounding) {
+      const ranked = sounding.map(([tongue, from], i) => ({ tongue, level: 1 / (i + 1), at: t.now + from }));
+      return { type: "strike", tongue: ranked[0].tongue, at: t.now, ranked };
+    }
+
+    // Hits every remaining step of the current piece, waiting out each flash. Chords are struck
+    // together.
     function playThrough(t, core) {
       let v = core.send({ type: "tick" });
       while (!v.done) {
-        core.send({ type: "strike", tongue: v.steps[v.position].tongues[0].id, at: t.now });
+        core.send(report(t, ...ids(v.steps[v.position]).map((id) => [id, 0])));
         t.now += 300;
         v = core.send({ type: "tick" });
       }
@@ -463,6 +471,174 @@
       check("the paste box opens empty again", [v.overlay.text, v.overlay.errors], ["", []]);
     }
 
+    // Two-line Step mode: parts.
+    const DUET = "title: Duet\nmelody: 3 5 | 6 - |\naccomp: 1 _5 | _6 - |";
+
+    // Saves a song through the paste box and picks it.
+    function pickNewSong(core, text) {
+      core.send({ type: "open", what: "editor" });
+      const v = core.send({ type: "saveSong", text });
+      return core.send({ type: "pick", pieceId: songsIn(v).at(-1).id });
+    }
+
+    // Plays one whole run of the current part on the first strike of every step, and waits out done.
+    function cleanRun(t, core) {
+      core.send({ type: "start" });
+      playThrough(t, core);
+      t.now += 1500;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const { t, core } = setup();
+      let v = pickNewSong(core, DUET);
+      check("a two-line piece starts in its melody part", [v.piece.part, v.steps.map(ids).join(" ")], ["melody", "3 5 6"]);
+      v = cleanRun(t, core);
+      check("a run of first-strike hits moves it on to the accompaniment part",
+        [v.piece.part, v.steps.map(ids).join(" "), v.position], ["accomp", "1 _5 _6", 0]);
+      v = cleanRun(t, core);
+      check("then to both lines, where stacked numbers are chords",
+        [v.piece.part, v.steps.map((s) => ids(s).join("+")).join(" ")], ["both", "3+1 5+_5 6+_6"]);
+      v = cleanRun(t, core);
+      check("both lines is the last part and stays put", v.piece.part, "both");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "4", at: t.now }); // a miss on the first step
+      playThrough(t, core);
+      t.now += 1500;
+      const v = core.send({ type: "tick" });
+      check("a finished run with a miss stays in its part", [v.piece.part, v.position, v.playing], ["melody", 0, true]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      cleanRun(t, core);
+      let v = core.send({ type: "pick", pieceId: "bells-two-lines" });
+      check("each piece has its own part", v.piece.part, "melody");
+      v = core.send({ type: "pick", pieceId: duet });
+      check("picking a piece again carries on in its part", v.piece.part, "accomp");
+      const fresh = setup(storage).core;
+      v = fresh.send({ type: "tick" });
+      check("the part persists across a fresh core on the same storage", [v.piece.part, v.steps.map(ids).join(" ")], ["accomp", "1 _5 _6"]);
+      v = fresh.send({ type: "start" });
+      check("Start restarts within the current part", [v.piece.part, v.position], ["accomp", 0]);
+      v = setup(fakeStorage({ "tongue-drum:piece": "bells-two-lines", "tongue-drum:parts": "[oops" })).core.send({ type: "tick" });
+      check("corrupt saved parts mean the first part, not a crash", v.piece.part, "melody");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      cleanRun(t, core);
+      core.send({ type: "deleteSong", pieceId: duet });
+      const v = pickNewSong(core, DUET);
+      check("a new song added after a delete can take the deleted one's id", v.piece.id, duet);
+      check("deleting a song removes its part: the new song starts in melody", v.piece.part, "melody");
+      check("…and after a reload too", setup(storage).core.send({ type: "tick" }).piece.part, "melody");
+    }
+
+    // The chord rule, on the detector's ranked report. DUET's both part is 3+1, 5+_5, 6+_6.
+    function inBoth() {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      cleanRun(t, core);
+      cleanRun(t, core);
+      core.send({ type: "start" });
+      t.now += 5000; // well clear of the last run's ringing
+      return { t, core };
+    }
+    const heardIn = (step) => step.tongues.filter((tg) => tg.heard).map((tg) => tg.id);
+
+    {
+      const { t, core } = inBoth();
+      let v = core.send(report(t, ["1", 10], ["3", 0], ["5", -2000]));
+      check("both tongues the two loudest, sounding together, is a hit, whichever is louder",
+        [heardIn(v.steps[0]), v.feedback], [["3", "1"], null]);
+      t.now += 300;
+      check("a chord hit moves on after the flash", core.send({ type: "tick" }).position, 1);
+    }
+
+    {
+      const { t, core } = inBoth();
+      const v = core.send(report(t, ["3", 0], ["1", 90]));
+      check("a chord's tongues may start up to about 0.1 s apart", heardIn(v.steps[0]), ["3", "1"]);
+    }
+
+    {
+      const { t, core } = inBoth();
+      let v = core.send(report(t, ["3", 0], ["1", -400], ["4", -20]));
+      check("one target loudest, the other sounding earlier: that number turns green and the step waits",
+        [heardIn(v.steps[0]), v.position, v.feedback], [["3"], 0, null]);
+      t.now += 1000;
+      v = core.send({ type: "tick" });
+      check("half a chord doesn't move on", v.position, 0);
+      v = core.send(report(t, ["1", 0], ["3", -1000]));
+      check("striking only the missing tongue doesn't finish the chord", [heardIn(v.steps[0]), v.position], [["1"], 0]);
+      t.now += 1000;
+      v = core.send(report(t, ["3", 0], ["1", 5]));
+      check("striking both together again finishes it", heardIn(v.steps[0]), ["3", "1"]);
+    }
+
+    {
+      const { t, core } = inBoth();
+      const v = core.send(report(t, ["1", 0], ["2", 0], ["3", 0]));
+      check("one target loudest with a wrong tongue second is half a chord", [heardIn(v.steps[0]), v.feedback], [["1"], null]);
+    }
+
+    {
+      const { t, core } = inBoth();
+      const v = core.send(report(t, ["4", 0], ["3", 0], ["1", 0]));
+      check("neither target loudest is a miss, saying what was heard",
+        [heardIn(v.steps[0]), v.feedback?.thatWas, v.position], [[], "4", 0]);
+    }
+
+    {
+      const { t, core } = inBoth();
+      core.send(report(t, ["3", 0], ["1", 0]));
+      t.now += 600;
+      let v = core.send(report(t, ["1", -600], ["3", -600], ["5", 0])); // step 2 is 5+_5
+      check("ring-on: the step just played still sounding is ignored, never a miss",
+        [v.position, v.feedback, heardIn(v.steps[1])], [1, null, []]);
+      t.now += 3000;
+      v = core.send(report(t, ["1", 0]));
+      check("long after, the same tongue is a miss", v.feedback?.thatWas, "1");
+    }
+
+    {
+      const { t, core } = inBoth();
+      core.send(report(t, ["4", 0])); // a miss
+      core.send(report(t, ["3", 0], ["1", 0]));
+      playThrough(t, core);
+      t.now += 1500;
+      check("a chord step with a miss isn't a first-strike hit", core.send({ type: "tick" }).piece.part, "both");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      core.send({ type: "start" });
+      core.send(report(t, ["3", 0]));
+      t.now += 600;
+      const v = core.send(report(t, ["3", -600])); // step 2 is 5
+      check("ring-on works on single-note steps too", [v.position, v.feedback], [1, null]);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      cleanRun(t, core);
+      core.send({ type: "start" });
+      const v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("a strike without a ranked report still counts on a single-note step", heardIn(v.steps[0]), ["1"]);
+    }
+
     // Edit and delete My songs.
     function withSongs(core, ...texts) {
       let v;
@@ -805,6 +981,39 @@
       const hint = core.send({ type: "strike", tongue: wrong, at: t.now }).hint;
       check("the Location hint appears on a made-up tune step as on any piece",
         [hint?.half, hint?.lit], [{ 1: "right", 3: "right", 5: "left" }[target], [target]]); // a tune starts on 1, 3 or 5
+    }
+
+    // The Location hint with two-line pieces.
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      core.send({ type: "start" });
+      t.now += 5000; // the hint appears on the first step
+      playThrough(t, core);
+      t.now += 1500;
+      check("a run where the hint was shown isn't all first-strike hits, so it stays in its part",
+        core.send({ type: "tick" }).piece.part, "melody");
+    }
+
+    {
+      const { t, core } = inBoth(); // the first step is 3+1, both on the right half
+      t.now += 5000;
+      check("the hint on a chord step lights both tongues", core.send({ type: "tick" }).hint, { half: "right", lit: ["3", "1"], wrong: null });
+      core.send({ type: "start" });
+      core.send(report(t, ["3", 0]));
+      const v = core.send(report(t, ["3", 0]));
+      check("after half a chord twice, the hint lights only the missing tongue", v.hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, "title: Wide\nmelody: 7 7\naccomp: 1 1"); // 7 on the left half, 1 on the right
+      cleanRun(t, core);
+      cleanRun(t, core);
+      core.send({ type: "start" });
+      t.now += 5000;
+      check("the hint on a chord across both halves shows the whole drum",
+        core.send({ type: "tick" }).hint, { half: "whole", lit: ["7", "1"], wrong: null });
     }
 
     const failed = results.filter((r) => !r.ok).length;
