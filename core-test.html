@@ -1016,6 +1016,81 @@
         core.send({ type: "tick" }).hint, { half: "whole", lit: ["7", "1"], wrong: null });
     }
 
+    // Chord steps straight away: a song saved with its part already at both lines.
+    function playChords(text, entries = {}) {
+      return playSong(text, fakeStorage({ "tongue-drum:parts": JSON.stringify({ "song-1": "both" }), ...entries }));
+    }
+
+    {
+      const { t, core } = playChords("title: Left\nmelody: 5 7\naccomp: _5 _7"); // 5+_5, all on the left half
+      t.now += 5000;
+      check("the hint on a chord on the left half shows the left half",
+        core.send({ type: "tick" }).hint, { half: "left", lit: ["5", "_5"], wrong: null });
+    }
+
+    {
+      const { t, core } = inBoth(); // 3+1
+      t.now += 5000;
+      core.send({ type: "tick" }); // the hint shows both tongues
+      const v = core.send(report(t, ["1", 0]));
+      check("half a chord with the hint showing lights only the missing tongue", v.hint, { half: "right", lit: ["3"], wrong: null });
+    }
+
+    {
+      const { t, core } = playChords("title: Wide\nmelody: 7 7\naccomp: 1 1"); // 7 on the left, 1 on the right
+      core.send(report(t, ["7", 0]));
+      let v = core.send(report(t, ["7", 0]));
+      check("a split chord, half heard: the missing tongue's own half, only it lit", v.hint, { half: "right", lit: ["1"], wrong: null });
+      v = core.send(report(t, ["1", 0]));
+      check("…and the other way round", v.hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = inBoth(); // 3+1
+      core.send({ type: "start" }); // a fresh step: inBoth waits long enough for the hint
+      let v = core.send(report(t, ["3", 0]));
+      check("one tongue of a chord is one miss: no hint yet", [heardIn(v.steps[0]), v.hint], [["3"], null]);
+      v = core.send(report(t, ["4", 0]));
+      check("one tongue of a chord, then a wrong tongue, is the 2nd miss: the hint shows",
+        [v.feedback?.thatWas, v.hint], ["4", { half: "right", lit: ["1"], wrong: "4" }]);
+    }
+
+    // The fade on chord steps. Both part: 3+1 three times, then 3 alone, then 1 alone.
+    const CHORD_FADE = "title: Chord fade\nmelody: 3 3 3 3 1\naccomp: 1 1 1 0 0";
+    const chordAndWait = (t, core, ...tongues) => {
+      core.send(report(t, ...tongues.map((tg) => [tg, 0])));
+      t.now += 300;
+      return core.send({ type: "tick" });
+    };
+
+    {
+      const { t, core } = playChords(CHORD_FADE);
+      for (let i = 0; i < 3; i++) chordAndWait(t, core, "3", "1");
+      t.now += 60000;
+      let v = core.send({ type: "tick" });
+      check("3 unaided chord hits fade the first tongue's hint", [ids(v.steps[v.position]), v.hint], [["3"], null]);
+      v = chordAndWait(t, core, "3");
+      t.now += 60000;
+      v = core.send({ type: "tick" });
+      check("…and the second's", [ids(v.steps[v.position]), v.hint], [["1"], null]);
+    }
+
+    {
+      const { t, core } = playChords(CHORD_FADE);
+      t.now += 5000;
+      chordAndWait(t, core, "3", "1"); // after the hint appeared
+      chordAndWait(t, core, "3", "1");
+      chordAndWait(t, core, "3", "1");
+      t.now += 5000;
+      let v = core.send({ type: "tick" });
+      check("a chord hit after the hint appeared doesn't add to the first tongue's fade",
+        [ids(v.steps[v.position]), v.hint], [["3"], { half: "right", lit: ["3"], wrong: null }]);
+      chordAndWait(t, core, "3");
+      t.now += 5000;
+      v = core.send({ type: "tick" });
+      check("…nor to the second's", [ids(v.steps[v.position]), v.hint], [["1"], { half: "right", lit: ["1"], wrong: null }]);
+    }
+
     // The settings gear: one "Location hints" switch, on by default and remembered.
     {
       const storage = fakeStorage();
