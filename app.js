@@ -13,7 +13,9 @@ const els = {
   melodyName: $("melody-name"), progress: $("progress"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
-  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
+  editor: $("editor"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
+  songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -59,6 +61,22 @@ function render(v) {
   els.pieces.hidden = v.overlay?.kind !== "pieces";
   // Rebuilt only when the list itself changed, so a tap isn't lost to a re-render.
   if (!els.pieces.hidden && JSON.stringify(v.overlay) !== JSON.stringify(before?.overlay)) renderPieces(v.overlay);
+
+  els.editor.hidden = v.overlay?.kind !== "editor";
+  if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
+}
+
+// The draft in the paste box is the screen's: the core only gives the starting text.
+function renderEditor({ text, errors }, wasOpen) {
+  if (!wasOpen) {
+    els.songText.value = text;
+    els.copyPrompt.textContent = "Copy conversion prompt";
+  }
+  els.songErrors.replaceChildren(...errors.map((e) => {
+    const li = document.createElement("li");
+    li.textContent = e.message;
+    return li;
+  }));
 }
 
 function renderPieces({ groups }) {
@@ -84,6 +102,17 @@ function renderPieces({ groups }) {
 
 els.melodyName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
 els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.addSong.addEventListener("click", () => render(core.send({ type: "open", what: "editor" })));
+els.editorClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.saveSong.addEventListener("click", () => render(core.send({ type: "saveSong", text: els.songText.value })));
+els.copyPrompt.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(shown.overlay.conversionPrompt);
+    els.copyPrompt.textContent = "Copied ✓";
+  } catch {
+    els.copyPrompt.textContent = "Couldn't copy";
+  }
+});
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 
 // --- Audio ---------------------------------------------------------------
