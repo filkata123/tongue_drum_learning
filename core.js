@@ -9,17 +9,25 @@ const DONE_MS = 1500;      // "done" shows this long before the piece starts aga
 const HINT_MISSES = 2;     // the Location hint appears after this many misses on a step…
 const HINT_IDLE_MS = 5000; // …or after this long with no strike, whichever comes first
 const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's hint retires
+const CHORD_MS = 100;      // a chord's tongues must each start sounding this close to the strike
+const RING_ON_MS = 1500;   // the step just played may still ring this long after it was hit
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
 
-// Step mode's tongues, one per step. Until two-line Step mode lands, a two-line piece plays its
-// melody line.
-const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
+// A two-line piece is taught in three parts, in this order. A one-line piece has no part (null).
+const partsOf = (piece) => (piece.lines.accomp?.length ? ["melody", "accomp", "both"] : [null]);
+
+// Step mode's steps in a part: each step is the tongues struck together, melody first.
+function stepsOf(piece, part) {
+  if (part === "both") return piece.both.map((s) => s.tongues);
+  return piece.lines[part === "accomp" ? "accomp" : "melody"].map((n) => [n.tongue]);
+}
 
 const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
 const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
 const FADE_KEY = "tongue-drum:fade";   // unaided hits in a row, per tongue: { [tongue]: count }
+const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line pieces past their first part
 
 const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
 
@@ -33,10 +41,10 @@ function loadSongs(storage) {
   });
 }
 
-// The fade counts as saved. Anything corrupt means no tongue has faded yet.
-function loadFade(storage) {
+// A stored { key: value } object. Anything corrupt means an empty one.
+function loadObject(storage, key) {
   try {
-    const saved = JSON.parse(storage.getItem(FADE_KEY));
+    const saved = JSON.parse(storage.getItem(key));
     return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
   } catch { return {}; }
 }
@@ -45,15 +53,32 @@ export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...EXERCISE_PIECES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
-  const fade = loadFade(storage);
-  const target = () => stepTongues(state.piece)[state.position]; // the current step's tongue
+  const fade = loadObject(storage, FADE_KEY); // no saved counts means no tongue has faded yet
+  const targets = () => steps()[state.position]; // the current step's tongues
+  // The current step's tongues not heard yet: all of them, or the other half of a chord.
+  const missing = () => targets().filter((t) => t !== state.partial);
+
+  // The part each piece is in: the saved one, or its first part if none was saved or the saved one
+  // no longer fits the piece (say, after an edit).
+  const parts = loadObject(storage, PARTS_KEY);
+  const partOf = (piece) => (partsOf(piece).includes(parts[piece.id]) ? parts[piece.id] : partsOf(piece)[0]);
+  const saveParts = () => storage.setItem(PARTS_KEY, JSON.stringify(parts));
+  function setPart(piece, part) {
+    parts[piece.id] = part;
+    saveParts();
+  }
+
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
-  // The one place a deleted piece's stored data goes: its song text, and its being the piece last
-  // picked. Anything stored per piece later (part, scores, tempo) must be removed here too.
+  // The one place a deleted piece's stored data goes: its song text, its being the piece last
+  // picked, and its part. Anything stored per piece later (scores, tempo) must be removed here too.
   function forgetPiece(id) {
     songs.splice(songs.findIndex((s) => s.id === id), 1);
     saveSongs();
     if (storage.getItem(PIECE_KEY) === id) storage.removeItem(PIECE_KEY);
+    if (id in parts) {
+      delete parts[id];
+      saveParts();
+    }
   }
   // Only My songs can be edited or deleted; asking for anything else is a programming error.
   function findSong(id) {
@@ -65,12 +90,16 @@ export function createPracticeCore({ storage, clock, random }) {
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
     piece: findPiece(storage.getItem(PIECE_KEY)) ?? EXERCISE_PIECES[0],
+    part: null, // the part being played; it changes only when a run starts
     playing: false,
     position: 0,
-    heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
+    heard: false, // the current step's tongue(s) were hit; strikes are ignored until the flash ends
+    partial: null, // the one tongue of a chord heard so far; both must be struck together again
+    firstStrikeHits: 0, // steps of this run hit on their first strike, with no hint shown
+    lastHit: null, // { tongues, at }: the step just played, which may still be ringing
     feedback: null,
     missSeq: 0,
-    misses: 0, // misses on the current step
+    misses: 0, // misses on the current step, half a chord included
     hint: false, // the Location hint is showing for the current step
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
@@ -78,6 +107,8 @@ export function createPracticeCore({ storage, clock, random }) {
     overlay: null, // null | "pieces" | "editor"
     editor: null, // { pieceId, text, errors } while the paste box is open; pieceId null = a new song
   };
+  state.part = partOf(state.piece);
+  const steps = () => stepsOf(state.piece, state.part);
 
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
@@ -93,12 +124,15 @@ export function createPracticeCore({ storage, clock, random }) {
     };
   }
 
-  // The Location hint: the target's half of the drum map with the target lit. A missed tongue on
-  // the other half isn't drawn; "That was X" names it.
+  // The Location hint: the target's half of the drum map with the target lit. On a chord step only
+  // the tongues still missing are lit, and the whole drum shows if they sit on different halves.
+  // A missed tongue that isn't drawn is still named by "That was X".
   function hintView() {
-    const half = halfOf(target());
+    const lit = missing();
+    const halves = new Set(lit.map(halfOf));
+    const half = halves.size === 1 ? [...halves][0] : "whole";
     const wrong = state.feedback?.thatWas;
-    return { half, lit: [target()], wrong: wrong && halfOf(wrong) === half ? wrong : null };
+    return { half, lit, wrong: wrong && (half === "whole" || halfOf(wrong) === half) ? wrong : null };
   }
 
   // A tongue's hint retires after enough unaided hits in a row; a miss on it brings it back.
@@ -112,11 +146,13 @@ export function createPracticeCore({ storage, clock, random }) {
   function view() {
     const { piece } = state;
     return {
-      // Until two-line Step mode lands, a two-line piece is always in its melody part.
-      piece: { id: piece.id, title: piece.title, group: piece.group, part: piece.lines.accomp ? "melody" : null },
+      piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part },
       playing: state.playing,
-      steps: stepTongues(piece).map((id, i) => ({
-        tongues: [{ id, heard: i < state.position || (i === state.position && state.heard) }],
+      steps: steps().map((tongues, i) => ({
+        tongues: tongues.map((id) => ({
+          id,
+          heard: i < state.position || (i === state.position && (state.heard || state.partial === id)),
+        })),
         missed: false,
       })),
       position: state.position,
@@ -145,6 +181,7 @@ export function createPracticeCore({ storage, clock, random }) {
 
   function newStep(at) {
     state.heard = false;
+    state.partial = null;
     state.misses = 0;
     state.hint = false;
     waitForHint(at);
@@ -158,26 +195,52 @@ export function createPracticeCore({ storage, clock, random }) {
 
   // A faded tongue gets no hint until a miss on it brings the hint back.
   function showHint() {
-    if (!faded(target())) state.hint = true;
+    if (missing().some((t) => !faded(t))) state.hint = true;
   }
 
   function moveOn(at) {
-    if (state.position + 1 < stepTongues(state.piece).length) {
+    if (state.position + 1 < steps().length) {
       state.position++;
       newStep(at);
       return;
     }
     state.done = true;
     state.doneSeq++;
+    // A run of first-strike hits moves a two-line piece on to its next part, from the next run on.
+    // "Both lines" is the last part and stays put. Nothing is asked.
+    const order = partsOf(state.piece);
+    const next = order[order.indexOf(state.part) + 1];
+    if (next && state.firstStrikeHits === steps().length) setPart(state.piece, next);
     // A finished piece starts again; the app never moves on to another piece by itself.
     schedule(DONE_MS, at, toFirstStep);
   }
 
+  // Every run starts here, in the piece's current part.
   function toFirstStep(at = clock()) {
+    state.part = partOf(state.piece);
     state.position = 0;
+    state.firstStrikeHits = 0;
     newStep(at);
     state.feedback = null;
     state.done = false;
+  }
+
+  // What a strike does to the current step: "hit", "partial" (one tongue of a chord), "miss" or
+  // "ignore". Single-note steps go by the detector's verdict (`tongue`); chord steps go by `ranked`.
+  function judge(targets, { tongue, at, ranked }) {
+    if (targets.length === 1 && tongue === targets[0]) return "hit";
+    if (targets.length > 1) {
+      // Struck now, not still ringing from an earlier strike.
+      const fresh = (r) => Math.abs(r.at - at) <= CHORD_MS;
+      const loudest = ranked.slice(0, targets.length);
+      // However close the levels: the chord's tongues are the loudest, all struck together.
+      if (loudest.length === targets.length && loudest.every((r) => targets.includes(r.tongue) && fresh(r))) return "hit";
+      if (targets.includes(ranked[0].tongue)) return fresh(ranked[0]) ? "partial" : "ignore";
+    }
+    // Ring-on: the step just played can still sound for a while, and that's never a miss.
+    const { lastHit } = state;
+    if (lastHit && lastHit.tongues.includes(tongue) && at - lastHit.at <= RING_ON_MS) return "ignore";
+    return "miss";
   }
 
   const commands = {
@@ -249,22 +312,28 @@ export function createPracticeCore({ storage, clock, random }) {
       state.playing = false;
       toFirstStep();
     },
-    strike({ tongue }) {
+    strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
-      if (tongue === target()) {
-        // A hit made after the hint appeared isn't unaided.
-        countForFade(tongue, !state.hint);
+      const verdict = judge(targets(), { tongue, at, ranked });
+      if (verdict === "ignore") return;
+      if (verdict === "hit") {
+        // A hit made after the hint appeared isn't unaided. A chord counts for both its tongues.
+        for (const t of targets()) countForFade(t, !state.hint);
+        if (!state.misses && !state.hint) state.firstStrikeHits++;
         state.heard = true;
         state.feedback = null;
+        state.lastHit = { tongues: targets(), at };
         // The flash is for the eye, so it runs from when the strike arrives, not from its onset
         // (`at`), or a late strike would barely show. Onsets matter once there's a beat (#38).
         schedule(HIT_FLASH_MS, clock(), moveOn);
-      } else {
-        state.feedback = { thatWas: tongue, seq: ++state.missSeq };
-        countForFade(target(), false);
-        if (++state.misses >= HINT_MISSES) showHint();
-        waitForHint(clock());
+        return;
       }
+      // Half a chord turns that number green, and the step waits for both tongues together.
+      if (verdict === "partial") state.partial = ranked[0].tongue;
+      else state.feedback = { thatWas: tongue, seq: ++state.missSeq };
+      for (const t of missing()) countForFade(t, false);
+      if (++state.misses >= HINT_MISSES) showHint();
+      waitForHint(clock());
     },
   };
 

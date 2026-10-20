@@ -72,8 +72,8 @@ function render(v) {
   if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
 }
 
-// The Location hint: the half of the drum map holding the target, with the target lit and a
-// wrong tongue on that half marked.
+// The Location hint: the half of the drum map holding the target (or the whole drum for a chord
+// across both halves), with the target lit and a wrong tongue on that half marked.
 function renderHint(hint) {
   if (!hint) {
     els.hint.replaceChildren();
