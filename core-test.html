@@ -12,6 +12,8 @@
     // Cache-busted so a plain reload always tests the latest code.
     const bust = `?v=${Date.now()}`;
     const { createPracticeCore } = await import(`./core.js${bust}`);
+    const { parseSongText } = await import(`./songtext.js${bust}`);
+    const { EXERCISES, NOTE_BY_ID } = await import(`./notes.js${bust}`);
 
     const out = document.getElementById("out");
     const results = [];
@@ -47,6 +49,30 @@
     }
 
     const ids = (step) => step.tongues.map((tg) => tg.id);
+
+    // Song text, through the parser seam (rhythm isn't visible in Step mode yet).
+    {
+      const notes = (line) => line.map((n) => `${n.tongue}@${n.start}+${n.length}`).join(" ");
+      const melody = (text) => notes(parseSongText(`title: T\nmelody: ${text}`).lines.melody);
+      check("title comes from the title line", parseSongText("title:  Morning tune \nmelody: 1").title, "Morning tune");
+      check("a plain number is one beat", melody("1 2 3"), "1@0+1 2@1+1 3@2+1");
+      check("each / halves a note", melody("1/ 2// 3"), "1@0+0.5 2@0.5+0.25 3@0.75+1");
+      check(". makes a note half as long again", melody("1. 2/ 3/. 4"), "1@0+1.5 2@1.5+0.5 3@2+0.75 4@2.75+1");
+      check("- holds one more beat", melody("1 - - 2 -"), "1@0+3 2@3+2");
+      check("0 is a rest: it takes time but isn't a note", melody("1 0 2/ 0/ 3"), "1@0+1 2@2+0.5 3@3+1");
+      check("| is a bar line and takes no time", melody("1 2 | 3 - |"), "1@0+1 2@1+1 3@2+2");
+      check("_ is a lower note and ˙ an upper note", melody("_6 ˙1 _5/"), "_6@0+1 ˙1@1+1 _5@2+0.5");
+      check("^ works like ˙", melody("^1 ^3/"), "˙1@0+1 ˙3@1+0.5");
+      check("spacing doesn't matter", melody("1/2/|3"), "1@0+0.5 2@0.5+0.5 3@1+1");
+
+      const one = parseSongText("title: One line\nmelody: 1 2");
+      check("a one-line piece has no accompaniment and no both steps", [one.lines.accomp, one.both], [undefined, undefined]);
+
+      const two = parseSongText("title: Two\nmelody: 3 5/ 6/ 5 - |\naccomp: 1 0 _5/ _6/ 0 |");
+      check("the accompaniment line is parsed too", notes(two.lines.accomp), "1@0+1 _5@2+0.5 _6@2.5+0.5");
+      check("both steps: notes starting at the same moment become one chord step, melody first",
+        two.both.map((s) => `${s.tongues.join("+")}@${s.start}`).join(" "), "3+1@0 5@1 6@1.5 5+_5@2 _6@2.5");
+    }
 
     {
       const { core } = setup();
@@ -100,32 +126,148 @@
     }
 
     {
-      const { t, core, storage } = setup();
+      const { t, core } = setup();
       core.send({ type: "start" });
       let v = playThrough(t, core);
       check("finishing a piece says which piece was done", v.done.title, "D major scale");
       check("every step was heard", v.steps.every((s) => s.tongues[0].heard), true);
+      const firstDone = v.done.seq;
       v = core.send({ type: "strike", tongue: "3", at: t.now });
       check("strikes while done is showing are ignored", v.feedback, null);
       t.now += 1500;
       v = core.send({ type: "tick" });
-      check("after done, the next exercise starts from its first step",
-        [v.done, v.piece.title, v.position, v.playing], [null, "Simple phrase", 0, true]);
-      check("the next exercise is remembered", storage.getItem("tongue-drum:melody"), "1");
+      check("after done, the same piece starts again from its first step",
+        [v.done, v.piece.title, v.position, v.steps[0].tongues[0].heard, v.playing],
+        [null, "D major scale", 0, false, true]);
+      v = playThrough(t, core);
+      check("finishing it again flashes done again", [v.done.title, v.done.seq > firstDone], ["D major scale", true]);
+      t.now += 60000;
+      v = core.send({ type: "tick" });
+      check("nothing moves on to another piece by itself",
+        [v.piece.title, v.position, v.done], ["D major scale", 0, null]);
     }
 
     {
-      const title = (stored) => setup(fakeStorage({ "tongue-drum:melody": stored })).core.send({ type: "tick" }).piece.title;
-      check("picks up at the remembered exercise", title("5"), "Upper octave");
-      for (const stored of ["not a number", "-1", "1.5", "7"])
-        check(`a corrupt remembered exercise ("${stored}") means the first one`, title(stored), "D major scale");
-      check("after the last exercise comes the first again", (() => {
-        const { t, core, storage } = setup(fakeStorage({ "tongue-drum:melody": "6" }));
-        core.send({ type: "start" });
-        playThrough(t, core);
-        t.now += 1500;
-        return [core.send({ type: "tick" }).piece.title, storage.getItem("tongue-drum:melody")];
-      })(), ["D major scale", "0"]);
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "strike", tongue: "2", at: t.now });
+      t.now += 300;
+      core.send({ type: "tick" });
+      const v = core.send({ type: "start" });
+      check("Start plays the current piece from step 1",
+        [v.piece.title, v.position, v.steps.some((s) => s.tongues[0].heard)], ["D major scale", 0, false]);
+    }
+
+    {
+      const writes = [];
+      const storage = fakeStorage({ "tongue-drum:melody": "5" });
+      const setItem = storage.setItem;
+      storage.setItem = (k, v) => { writes.push(k); setItem(k, v); };
+      const { t, core } = setup(storage);
+      let v = core.send({ type: "tick" });
+      check("the old saved melody index is ignored", v.piece.title, "D major scale");
+      core.send({ type: "start" });
+      playThrough(t, core);
+      t.now += 1500;
+      core.send({ type: "tick" });
+      check("the old melody index is never written", writes.includes("tongue-drum:melody"), false);
+    }
+
+    {
+      const pieces = EXERCISES.map((e) => parseSongText(e.text));
+      check("every exercise has a title and notes", pieces.every((p) => p.title && p.lines.melody.length > 0), true);
+      check("every exercise note is a tongue on the drum",
+        pieces.flatMap((p) => [...p.lines.melody, ...(p.lines.accomp ?? [])]).filter((n) => !NOTE_BY_ID[n.tongue]), []);
+      const twoLine = pieces.filter((p) => p.lines.accomp);
+      check("2–3 two-line exercises exist", twoLine.length >= 2 && twoLine.length <= 3, true);
+      check("each two-line exercise has chord steps", twoLine.every((p) => p.both.some((s) => s.tongues.length === 2)), true);
+      check("no chord asks for one tongue twice", twoLine.every((p) => p.both.every((s) => new Set(s.tongues).size === s.tongues.length)), true);
+    }
+
+    // The piece list.
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      let v = core.send({ type: "pick", pieceId: "simple-phrase" });
+      check("picking a piece makes it the current piece", v.piece.title, "Simple phrase");
+      v = setup(storage).core.send({ type: "tick" });
+      check("the current piece persists across a fresh core on the same storage", v.piece.title, "Simple phrase");
+      v = setup().core.send({ type: "tick" });
+      check("a fresh device's current piece is the first exercise", v.piece.title, "D major scale");
+      v = setup(fakeStorage({ "tongue-drum:piece": "no-such-piece" })).core.send({ type: "tick" });
+      check("a saved piece that no longer exists falls back to the first exercise", v.piece.title, "D major scale");
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "strike", tongue: "5", at: t.now }); // a miss on step 2
+      let v = core.send({ type: "pick", pieceId: "up-and-down" });
+      check("picking a piece mid-run stops the run on its first step, with nothing heard",
+        [v.piece.title, v.playing, v.position, v.feedback, v.steps.some((s) => s.tongues[0].heard)],
+        ["Up and down", false, 0, null, false]);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("strikes after picking are ignored until Start", v.steps[0].tongues[0].heard, false);
+      v = core.send({ type: "start" });
+      check("Start plays the picked piece from step 1",
+        [v.piece.title, v.playing, v.position, v.steps.map(ids).join(" ")], ["Up and down", true, 0, "1 3 5 7 5 3 1"]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      playThrough(t, core);
+      let v = core.send({ type: "pick", pieceId: "classic-step" });
+      check("picking while done is showing clears done", [v.done, v.playing], [null, false]);
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      check("the old piece's restart doesn't fire after a pick", [v.piece.title, v.playing, v.done], ["Classic step", false, null]);
+    }
+
+    {
+      const { core } = setup();
+      check("no overlay is open at first", core.send({ type: "tick" }).overlay, null);
+      core.send({ type: "pick", pieceId: "simple-phrase" });
+      let v = core.send({ type: "open", what: "pieces" });
+      check("the piece list has two groups, Exercises then My songs",
+        [v.overlay.kind, v.overlay.groups.map((g) => g.title)], ["pieces", ["Exercises", "My songs"]]);
+      const [exercises, mySongs] = v.overlay.groups;
+      check("Exercises lists every exercise in order",
+        exercises.pieces.map((p) => p.title).slice(0, 3), ["D major scale", "Simple phrase", "Up and down"]);
+      check("My songs is empty until a song is added", mySongs.pieces, []);
+      check("only the current piece is marked current",
+        exercises.pieces.filter((p) => p.current).map((p) => p.id), ["simple-phrase"]);
+      check("exercises are read-only", exercises.pieces.some((p) => p.editable), false);
+      v = core.send({ type: "close" });
+      check("close shuts the piece list and keeps the current piece", [v.overlay, v.piece.title], [null, "Simple phrase"]);
+      core.send({ type: "open", what: "pieces" });
+      v = core.send({ type: "pick", pieceId: "upper-octave" });
+      check("picking a piece shuts the list, back to the main screen", [v.overlay, v.piece.title], [null, "Upper octave"]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "start" });
+      let v = core.send({ type: "open", what: "pieces" });
+      check("opening the list mid-run doesn't stop the run", v.playing, true);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("strikes are ignored while the list is open", [v.steps[0].tongues[0].heard, v.feedback], [false, null]);
+      core.send({ type: "close" });
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("closing the list carries on with the run", [v.playing, v.steps[0].tongues[0].heard], [true, true]);
+    }
+
+    {
+      const { core } = setup();
+      const v = core.send({ type: "pick", pieceId: "bells-two-lines" });
+      check("a two-line piece plays its melody line in Step mode", v.steps.map(ids).join(" "), "5 3 5 3 1");
+      let threw = false;
+      try { core.send({ type: "pick", pieceId: "no-such-piece" }); } catch { threw = true; }
+      check("picking an unknown piece throws", threw, true);
     }
 
     {
@@ -152,9 +294,9 @@
     }
 
     {
-      const { t, core } = setup(fakeStorage({ "tongue-drum:melody": "5" }));
+      const { t, core } = setup();
       core.send({ type: "start" });
-      for (const tongue of ["˙1", "˙2", "˙3", "˙2"]) {
+      for (const tongue of ["1", "2", "3", "4", "5", "6", "7"]) {
         core.send({ type: "strike", tongue, at: t.now });
         t.now += 300;
         core.send({ type: "tick" });
@@ -163,7 +305,7 @@
       t.now += 10000; // the screen was asleep: no ticks through the flash and done
       const v = core.send({ type: "tick" });
       check("one late tick catches up through the flash and done",
-        [v.piece.title, v.position, v.done], ["Lower octave", 0, null]);
+        [v.piece.title, v.position, v.done], ["D major scale", 0, null]);
     }
 
     {

@@ -17,7 +17,7 @@
 
   <main id="play" class="screen" hidden>
     <header>
-      <span id="melody-name"></span>
+      <button id="melody-name" type="button" aria-haspopup="dialog"></button>
       <span id="progress"></span>
     </header>
 
@@ -28,6 +28,7 @@
 
     <footer>
       <p id="feedback"></p>
+      <button id="restart-btn" type="button">Restart</button>
       <p id="debug" hidden></p>
       <div id="note-bars" hidden></div>
       <p id="sim-hint" class="hint" hidden>Sim mode: keys 1–7 = middle row, Z X C V B = lower 3–7, 8 9 0 = upper 1–3</p>
@@ -37,6 +38,14 @@
     <div id="done" hidden>
       <div class="check">✓</div>
       <div id="done-text"></div>
+    </div>
+
+    <div id="pieces" role="dialog" aria-label="Pieces" hidden>
+      <div id="pieces-head">
+        <span>Pieces</span>
+        <button id="pieces-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="pieces-groups"></div>
     </div>
   </main>
 
