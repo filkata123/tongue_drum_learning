@@ -16,6 +16,7 @@ const els = {
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
+  gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -70,6 +71,9 @@ function render(v) {
 
   els.editor.hidden = v.overlay?.kind !== "editor";
   if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
+
+  els.gear.hidden = v.overlay?.kind !== "gear";
+  if (!els.gear.hidden) els.hintsSwitch.checked = v.overlay.hints;
 }
 
 // The Location hint: the half of the drum map holding the target (or the whole drum for a chord
@@ -154,6 +158,9 @@ els.copyPrompt.addEventListener("click", async () => {
     els.copyPrompt.textContent = "Couldn't copy";
   }
 });
+els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send({ type: "open", what: "gear" }))));
+els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 
 // --- Audio ---------------------------------------------------------------

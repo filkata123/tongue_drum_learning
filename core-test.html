@@ -918,6 +918,78 @@
         core.send({ type: "tick" }).hint, { half: "whole", lit: ["7", "1"], wrong: null });
     }
 
+    // The settings gear: one "Location hints" switch, on by default and remembered.
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      let v = core.send({ type: "open", what: "gear" });
+      check("the gear opens with Location hints on", v.overlay, { kind: "gear", hints: true, tempo: null });
+      v = core.send({ type: "setHints", on: false });
+      check("the switch turns Location hints off", v.overlay.hints, false);
+      check("closing the gear goes back to the main screen", core.send({ type: "close" }).overlay, null);
+      const fresh = setup(storage);
+      check("the switch survives a fresh core on the same storage",
+        fresh.core.send({ type: "open", what: "gear" }).overlay.hints, false);
+      fresh.core.send({ type: "setHints", on: true });
+      check("and so does turning it back on", setup(storage).core.send({ type: "open", what: "gear" }).overlay.hints, true);
+    }
+
+    {
+      const { core } = setup(fakeStorage({ "tongue-drum:hints": "{oops" }));
+      check("a corrupt switch means hints are on", core.send({ type: "open", what: "gear" }).overlay.hints, true);
+    }
+
+    // Hints off: no hint ever appears, but the fade is still tracked.
+    const hintsOff = () => fakeStorage({ "tongue-drum:hints": "false" });
+
+    {
+      const { t, core } = playSong(HINT_SONG, hintsOff());
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      let v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("with hints off, the 2nd miss shows only 'That was'", [v.feedback.thatWas, v.hint], ["3", null]);
+      t.now += 60000;
+      check("with hints off, no hint after any wait", core.send({ type: "tick" }).hint, null);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      core.send({ type: "tick" });
+      check("turning hints off takes away a hint that's showing", core.send({ type: "setHints", on: false }).hint, null);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG, hintsOff());
+      for (const tongue of ["1", "7", "1", "7", "1", "7"]) {
+        t.now += 5000; // long enough that the hint would have shown
+        strikeAndWait(t, core, tongue);
+      }
+      core.send({ type: "setHints", on: true });
+      t.now += 60000;
+      check("hits with hints off count towards the fade, however slow", core.send({ type: "tick" }).hint, null);
+    }
+
+    {
+      const storage = hintsOff();
+      const { t, core } = playSong(HINT_SONG, storage);
+      for (const tongue of ["1", "7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      core.send({ type: "strike", tongue: "3", at: t.now }); // a miss on the faded `1`, hints off
+      core.send({ type: "setHints", on: true });
+      const fresh = playSong(HINT_SONG, storage);
+      fresh.t.now += 5000;
+      check("a miss with hints off brings the tongue's hint back", fresh.core.send({ type: "tick" }).hint?.lit, ["1"]);
+    }
+
+    {
+      const { t, core } = inBoth(); // the first step is 3+1
+      core.send({ type: "setHints", on: false });
+      t.now += 5000;
+      check("with hints off, no hint on a chord step after a wait", core.send({ type: "tick" }).hint, null);
+      core.send(report(t, ["3", 0]));
+      const v = core.send(report(t, ["3", 0]));
+      check("with hints off, no hint after half a chord twice", v.hint, null);
+    }
+
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
     window.testResults = { failed, out: out.textContent };

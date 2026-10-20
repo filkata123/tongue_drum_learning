@@ -28,6 +28,7 @@ const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
 const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
 const FADE_KEY = "tongue-drum:fade";   // unaided hits in a row, per tongue: { [tongue]: count }
 const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line pieces past their first part
+const HINTS_KEY = "tongue-drum:hints"; // the gear's "Location hints" switch: true | false
 
 const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
 
@@ -49,11 +50,17 @@ function loadObject(storage, key) {
   } catch { return {}; }
 }
 
+// The "Location hints" switch as saved. Anything but a saved false means on.
+function loadHints(storage) {
+  try { return JSON.parse(storage.getItem(HINTS_KEY)) !== false; } catch { return true; }
+}
+
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...EXERCISE_PIECES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
   const fade = loadObject(storage, FADE_KEY); // no saved counts means no tongue has faded yet
+  let hintsOn = loadHints(storage);
   const targets = () => steps()[state.position]; // the current step's tongues
   // The current step's tongues not heard yet: all of them, or the other half of a chord.
   const missing = () => targets().filter((t) => t !== state.partial);
@@ -104,7 +111,7 @@ export function createPracticeCore({ storage, clock, random }) {
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
-    overlay: null, // null | "pieces" | "editor"
+    overlay: null, // null | "pieces" | "gear" | "editor"
     editor: null, // { pieceId, text, errors } while the paste box is open; pieceId null = a new song
   };
   state.part = partOf(state.piece);
@@ -160,6 +167,7 @@ export function createPracticeCore({ storage, clock, random }) {
       hint: state.hint ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       overlay: state.overlay === "pieces" ? piecesOverlay()
+        : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: null }
         : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
         : null,
     };
@@ -193,9 +201,10 @@ export function createPracticeCore({ storage, clock, random }) {
     else state.timer = null;
   }
 
-  // A faded tongue gets no hint until a miss on it brings the hint back.
+  // A faded tongue gets no hint until a miss on it brings the hint back. With hints switched off
+  // none ever shows, so every hit counts as unaided and the fade stays accurate.
   function showHint() {
-    if (missing().some((t) => !faded(t))) state.hint = true;
+    if (hintsOn && missing().some((t) => !faded(t))) state.hint = true;
   }
 
   function moveOn(at) {
@@ -250,7 +259,7 @@ export function createPracticeCore({ storage, clock, random }) {
       toFirstStep();
     },
     open({ what, pieceId }) {
-      if (what !== "pieces" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
+      if (what !== "pieces" && what !== "gear" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
       // Editing a song reopens its saved text; without a pieceId the paste box is for a new song.
       const song = what === "editor" && pieceId != null ? findSong(pieceId) : null;
       state.overlay = what;
@@ -301,6 +310,12 @@ export function createPracticeCore({ storage, clock, random }) {
       // The paste box was opened from the piece list, so closing it goes back there.
       state.overlay = state.overlay === "editor" ? "pieces" : null;
       state.editor = null;
+    },
+    setHints({ on }) {
+      hintsOn = Boolean(on);
+      storage.setItem(HINTS_KEY, JSON.stringify(hintsOn));
+      // Switching on takes effect from the next miss or wait, not on the spot.
+      if (!hintsOn) state.hint = false;
     },
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
