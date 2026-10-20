@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<!--
+  PROTOTYPE, throwaway. Wayfinder ticket: "How does the main screen fit on a phone held near the drum?"
+  Three structurally different main-screen layouts, switchable via ?variant=A|B|C (or ← / →).
+  No microphone: drive it with the yellow sim bar (or keys H hit, M miss, P half chord, F finish,
+  L Listen, T Timed, 1/2/3 part, N next piece). Self-contained: double-click to open.
+  On a wide screen it renders inside a phone-sized frame; open it on a phone to see it full size.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PROTOTYPE · main screen</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #030712; color: #f9fafb;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+button { font: inherit; color: inherit; cursor: pointer; }
+#phone { position: relative; width: 100vw; height: 100dvh; background: #111827; overflow: hidden; }
+@media (min-width: 700px) {
+  body { display: flex; align-items: center; justify-content: center; }
+  #phone { width: 390px; height: 800px; border-radius: 28px; border: 8px solid #374151; }
+}
+#app { position: absolute; inset: 0; } /* bottom set from the prototype bars' height, see fit() */
+
+/* ---------- shared bits ---------- */
+.n { position: relative; display: inline-block; line-height: 1; }
+.lit { color: #fde047 !important; }
+.hitc { color: #22c55e !important; }
+.missc { color: #f87171 !important; }
+.ghost { opacity: .35; }
+.gear, .pname { background: none; border: none; color: #9ca3af; }
+.pname { font-size: 1.05rem; text-align: left; padding: 0; }
+.pname small { display: block; font-size: .75rem; color: #6b7280; }
+.result { color: #d1d5db; text-align: center; font-size: 1rem; }
+.feedback { color: #f87171; text-align: center; min-height: 1.4em; }
+.switch { display: inline-flex; align-items: center; gap: .4rem; color: #9ca3af; font-size: .9rem;
+  background: none; border: none; }
+.switch i { width: 2.2rem; height: 1.3rem; border-radius: 999px; background: #374151; position: relative; }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 1.05rem; height: 1.05rem;
+  border-radius: 50%; background: #9ca3af; transition: left .15s; }
+.switch.on i { background: #2563eb; } .switch.on i::after { left: 1.05rem; background: #fff; }
+.startbtn { border: none; border-radius: 999px; background: #22c55e; color: #052e16; font-weight: 700; }
+.listenbtn { border: 1px solid #374151; background: #1f2937; border-radius: 999px; }
+.speed { display: inline-flex; align-items: center; gap: .3rem; color: #9ca3af; }
+.speed button { width: 2rem; height: 2rem; border-radius: 50%; border: 1px solid #374151; background: #1f2937; }
+.beat { width: .8rem; height: .8rem; border-radius: 50%; background: #374151; display: inline-block; }
+.beat.on { background: #60a5fa; }
+
+/* Drum map: 15 tongues. Placement is approximate; the real layout comes from the drum. */
+.drum { position: relative; aspect-ratio: 1; border-radius: 50%; background: #1f2937; border: 2px solid #374151; }
+.drum .t { position: absolute; width: 13%; height: 13%; transform: translate(-50%, -50%); border-radius: 40%;
+  background: #374151; color: #6b7280; display: flex; align-items: center; justify-content: center; font-size: .8em; }
+.drum .t.target { background: #fde047; color: #111827; }
+.drum .t.wrong { background: #f87171; color: #111827; }
+
+/* ---------- prototype chrome (not part of the design) ---------- */
+#proto { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 99; width: min(100vw - 8px, 520px);
+  font-size: 13px; color: #111827; }
+#sim, #switcher { background: #fde047; border: 2px dashed #111827; border-radius: 12px; padding: 4px 6px;
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center; justify-content: center; box-shadow: 0 4px 14px #0008; }
+#sim { margin-bottom: 4px; }
+#sim button, #switcher button { border: 1px solid #111827; background: #fff; border-radius: 6px; padding: 2px 7px; color: #111827; }
+#switcher b { min-width: 9rem; text-align: center; }
+#state { width: 100%; text-align: center; font-family: ui-monospace, monospace; font-size: 11px; }
+
+/* ---------- Variant A: "Big number" — one column, controls in a bottom thumb row ---------- */
+.vA { height: 100%; display: flex; flex-direction: column; padding: 12px 16px; }
+.vA header { display: flex; justify-content: space-between; align-items: center; }
+.vA .stage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; position: relative; }
+.vA .cur { display: flex; flex-direction: column; align-items: center; font-weight: 700; }
+.vA .cur .m { font-size: 9rem; }
+.vA .cur.two .m { font-size: 6.5rem; }
+.vA .cur .a { font-size: 4.2rem; color: #93c5fd; margin-top: .25em; }
+.vA .nexts { display: flex; gap: 18px; color: #6b7280; font-weight: 700; align-items: flex-start; }
+.vA .nexts .step { display: flex; flex-direction: column; align-items: center; }
+.vA .nexts .m { font-size: 2.3rem; } .vA .nexts .a { font-size: 1.6rem; color: #4b6a99; margin-top: .3em; }
+.vA .nexts .step:nth-child(2) { opacity: .7 } .vA .nexts .step:nth-child(3) { opacity: .45 }
+.vA .hint { position: absolute; left: 0; right: 0; bottom: 0; height: 52%; display: flex; align-items: center;
+  justify-content: center; background: #111827f0; }
+.vA .hint .drum { height: 100%; font-size: 1.1rem; }
+.vA .stage.hinting { justify-content: flex-start; }
+.vA .stage.hinting .cur .m { font-size: 6rem; } .vA .stage.hinting .cur .a { font-size: 3.5rem; }
+.vA .stage.hinting .nexts { display: none; }
+.vA .bottom { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vA .startbtn { font-size: 1.5rem; padding: .6rem 1.8rem; }
+.vA .listenbtn { padding: .55rem .9rem; }
+/* A's octave marks: dots, but big and well clear of the digit */
+.vA .n.high::before, .vA .n.low::after { content: ""; position: absolute; left: 50%; width: .17em; height: .17em;
+  border-radius: 50%; background: currentColor; transform: translateX(-50%); }
+.vA .n.high::before { top: -.2em; } .vA .n.low::after { bottom: -.22em; }
+
+/* ---------- Variant B: "Reading strip" — steps flow left→right like a sheet; drum map has a fixed home ---------- */
+.vB { height: 100%; display: grid; grid-template-rows: auto auto 1fr auto auto; padding: 10px 14px; gap: 6px; }
+.vB header { display: flex; justify-content: space-between; align-items: center; }
+.vB .tools { display: flex; justify-content: space-between; align-items: center; }
+.vB .strip { display: flex; align-items: center; gap: 14px; overflow: hidden; padding: 6px 0; font-weight: 700; }
+.vB .strip .step { display: flex; flex-direction: column; align-items: center; flex: none; }
+.vB .strip .step .a { color: #93c5fd; }
+.vB .strip .cur { font-size: 6.2rem; background: #1f2937; border-radius: 18px; padding: .1em .22em .2em; }
+.vB .strip .cur .a { font-size: .62em; margin-top: .15em; }
+.vB .strip .nx { color: #6b7280; } .vB .strip .nx .a { color: #4b6a99; font-size: .7em; margin-top: .25em; }
+.vB .strip .nx1 { font-size: 3rem } .vB .strip .nx2 { font-size: 2.2rem; opacity: .7 } .vB .strip .nx3 { font-size: 1.6rem; opacity: .45 }
+.vB .map { display: flex; align-items: center; justify-content: center; }
+.vB .map .drum { height: 100%; max-height: 260px; font-size: 1rem; }
+.vB .map .drum.idle { opacity: .25; }
+.vB .bottom { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.vB .startbtn { font-size: 1.4rem; padding: .7rem; width: 100%; }
+/* B's octave marks: dots plus a colour per row (low amber, high sky) */
+.vB .n.high::before, .vB .n.low::after { content: ""; position: absolute; left: 50%; width: .16em; height: .16em;
+  border-radius: 50%; background: currentColor; transform: translateX(-50%); }
+.vB .n.high::before { top: -.18em; } .vB .n.low::after { bottom: -.2em; }
+.vB .n.low { color: #fbbf24; } .vB .n.high { color: #38bdf8; }
+.vB .nx .n.low { color: #a16207; } .vB .nx .n.high { color: #0369a1; }
+
+/* ---------- Variant C: "Card + drawer" — everything but the notes is tucked away ---------- */
+.vC { height: 100%; display: flex; flex-direction: column; }
+.vC .top { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; }
+.vC .card { flex: 1; margin: 0 12px; border-radius: 24px; background: #0b1220; display: flex; position: relative; overflow: hidden; }
+.vC .now { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-weight: 700; }
+.vC .now .m { font-size: 8.5rem; } .vC .now.two .m { font-size: 6rem; }
+.vC .now .a { font-size: 4rem; color: #93c5fd; margin-top: .3em; }
+.vC .rail { width: 70px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+  border-left: 1px solid #1f2937; color: #6b7280; font-weight: 700; }
+.vC .rail .step { display: flex; flex-direction: column; align-items: center; }
+.vC .rail .m { font-size: 2rem; } .vC .rail .a { font-size: 1.4rem; color: #4b6a99; margin-top: .25em; }
+.vC .rail .step:nth-child(2) { opacity: .65 } .vC .rail .step:nth-child(3) { opacity: .4 }
+.vC .hint { position: absolute; right: 10px; bottom: 10px; width: 46%; font-size: .9rem; }
+.vC .below { padding: 8px 14px; min-height: 3.2rem; }
+.vC .fab { position: absolute; right: 14px; bottom: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.vC .drawer { display: flex; align-items: center; justify-content: space-around; padding: 10px 14px 12px;
+  border-top: 1px solid #1f2937; background: #0f172a; }
+.vC .startbtn { width: 4.2rem; height: 4.2rem; font-size: 1.1rem; }
+.vC .listenbtn { padding: .5rem .8rem; }
+/* C's octave marks: a bar over/under the digit (wider than a dot), digit nudged up/down */
+.vC .n.high::before, .vC .n.low::after { content: ""; position: absolute; left: 12%; right: 12%; height: .08em;
+  border-radius: .04em; background: currentColor; }
+.vC .n.high { top: -.06em } .vC .n.low { top: .06em }
+.vC .n.high::before { top: -.14em; } .vC .n.low::after { bottom: -.14em; }
+
+@keyframes shake { 25% { transform: translateX(-.05em) } 75% { transform: translateX(.05em) } }
+.shake { animation: shake .3s; display: inline-flex; flex-direction: inherit; align-items: inherit; }
+</style>
+</head>
+<body>
+<div id="phone"><div id="app"></div></div>
+
+<div id="proto">
+  <div id="sim">
+    <button data-k="h">Hit</button><button data-k="m">Miss</button><button data-k="p">½ chord</button>
+    <button data-k="f">Finish</button><button data-k="l">Listen</button><button data-k="t">Timed</button>
+    <button data-k="1">Melody</button><button data-k="2">Accomp</button><button data-k="3">Both</button>
+    <button data-k="n">Next piece</button>
+    <div id="state"></div>
+  </div>
+  <div id="switcher"><button id="prev">◀</button><b id="vlabel"></b><button id="next">▶</button></div>
+</div>
+
+<script>
+// ---------- data ----------
+const TONGUES = ["_3","_4","_5","_6","_7","1","2","3","4","5","6","7","˙1","˙2","˙3"];
+const PIECES = [
+  { name: "Ode to Joy (two-line)", group: "Exercise", two: true, tempo: 60,
+    steps: [["3","_5"],["3",null],["4","_6"],["5",null],["5","_7"],["4",null],["3","_5"],["2",null],
+            ["1","_3"],["1",null],["2","_6"],["3",null],["3","_5"],["2",null],["2","_5"],[null,"_3"]] },
+  { name: "Octave check", group: "Exercise", two: false, tempo: 60,
+    steps: [["3"],["˙3"],["3"],["_3"],["˙1"],["1"],["_5"],["5"],["˙2"],["2"],["_6"],["6"]].map(([m]) => [m, null]) },
+  { name: "Scarborough Fair", group: "My songs", two: true, tempo: 64,
+    steps: [["2","_6"],["2",null],["6","_3"],["6",null],["7","_5"],["5",null],["6","_6"],[null,"_4"],["˙1","_7"],["˙2",null],["˙1","_5"],["7",null],["6","_6"]] },
+];
+const VARIANTS = { A: "Big number", B: "Reading strip", C: "Card + drawer" };
+
+// ---------- state (in memory only) ----------
+const S = { piece: 0, part: "both", step: 0, playing: false, misses: 0, idleSince: Date.now(), hint: false,
+  wrong: null, feedback: null, flash: null, halfHeard: null, timed: false, beat: false, beatTimer: null,
+  listening: false, listenIdx: -1, listenSpeed: 60, listenTimer: null, result: null, runs: {} };
+
+const piece = () => PIECES[S.piece];
+const part = () => piece().two ? S.part : "melody";
+function steps() { // the notes of the current part, one entry per step: {m, a}
+  const p = piece(), pt = S.timed ? "melody" : part();
+  return p.steps.map(([m, a]) => ({ m: pt === "accomp" ? null : m, a: pt === "melody" ? null : a }))
+    .filter((s) => s.m || s.a);
+}
+const targets = (s) => [s.m, s.a].filter(Boolean);
+
+// ---------- sim actions ----------
+function hit() {
+  if (S.listening) return;
+  if (!S.playing) return start();
+  S.result = null;
+  if (S.timed) { S.flash = "hit"; return render(); }
+  S.flash = "hit"; S.feedback = null; render();
+  setTimeout(advance, 220);
+}
+function miss() {
+  if (S.listening || !S.playing) return;
+  S.result = null;
+  const t = targets(steps()[S.step]);
+  const wrong = TONGUES.filter((x) => !t.includes(x))[Math.floor(Math.random() * 12)];
+  S.misses++; S.wrong = wrong; S.feedback = wrong; S.flash = "miss";
+  if (!S.timed && S.misses >= 2) S.hint = true;
+  S.idleSince = Date.now(); render();
+}
+function half() {
+  const s = steps()[S.step]; if (!s || !(s.m && s.a) || !S.playing) return;
+  S.result = null; S.halfHeard = s.m; S.idleSince = Date.now(); render();
+}
+function advance() {
+  S.step++; S.misses = 0; S.hint = false; S.wrong = null; S.feedback = null; S.flash = null; S.halfHeard = null;
+  S.idleSince = Date.now();
+  if (S.step >= steps().length) return finish();
+  render();
+}
+function finish() {
+  const key = piece().name + "/" + part(), n = steps().length;
+  const score = Math.max(0, n - Math.floor(Math.random() * 4));
+  if (S.timed) S.result = `${score}/${n} on time · Tempo ${piece().tempo} → ${piece().tempo + 4} next time`;
+  else if (S.runs[key]) S.result = `again: ${score}/${n}`;
+  else S.result = `First run today: ${score}/${n} · last time ${Math.max(0, score - 3)}/${n}`;
+  S.runs[key] = true;
+  S.step = 0; S.misses = 0; S.hint = false; S.feedback = null; S.flash = null; S.idleSince = Date.now();
+  render();
+}
+function start() {
+  stopListen(); S.playing = true; S.step = 0; S.misses = 0; S.hint = false; S.feedback = null; S.result = null;
+  S.halfHeard = null; S.idleSince = Date.now();
+  clearInterval(S.beatTimer);
+  if (S.timed) S.beatTimer = setInterval(() => { S.beat = !S.beat; if (S.beat && S.flash !== "hit") S.flash = "miss";
+    if (!S.beat) { S.step++; S.flash = null; if (S.step >= steps().length) { clearInterval(S.beatTimer); finish(); } } render(); }, 500);
+  render();
+}
+function toggleTimed() { S.timed = !S.timed; S.playing = false; clearInterval(S.beatTimer); S.step = 0; render(); }
+function setPart(p) { if (!piece().two) return; S.part = p; S.playing = false; S.step = 0; clearInterval(S.beatTimer); render(); }
+function nextPiece() { S.piece = (S.piece + 1) % PIECES.length; S.playing = false; S.step = 0; S.result = null; clearInterval(S.beatTimer); render(); }
+function listen() { S.listening ? stopListen() : startListen(); render(); }
+let ctx;
+function tone(id) {
+  if (!id) return; ctx ??= new AudioContext();
+  const midi = { "_3":54,"_4":55,"_5":57,"_6":59,"_7":61,"1":62,"2":64,"3":66,"4":67,"5":69,"6":71,"7":73,"˙1":74,"˙2":76,"˙3":78 }[id];
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = 440 * 2 ** ((midi - 69) / 12); g.gain.setValueAtTime(.25, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(.001, ctx.currentTime + 1.2); o.connect(g).connect(ctx.destination);
+  o.start(); o.stop(ctx.currentTime + 1.2);
+}
+function startListen() {
+  S.listening = true; S.listenIdx = -1; S.listenSpeed = piece().tempo;
+  const tick = () => {
+    S.listenIdx++; const s = steps()[S.listenIdx];
+    if (!s) { stopListen(); return render(); }
+    tone(s.m); tone(s.a); render();
+    S.listenTimer = setTimeout(tick, 60000 / S.listenSpeed);
+  };
+  tick();
+}
+function stopListen() { clearTimeout(S.listenTimer); S.listening = false; S.listenIdx = -1; }
+function speed(d) { S.listenSpeed = Math.min(160, Math.max(40, S.listenSpeed + d)); render(); }
+setInterval(() => { // ~5 s without a strike brings the Location hint
+  if (S.playing && !S.timed && !S.listening && !S.hint && Date.now() - S.idleSince > 5000) { S.hint = true; render(); }
+}, 250);
+
+// ---------- rendering helpers ----------
+function n(id, cls = "") {
+  if (!id) return `<span class="n ghost ${cls}">·</span>`;
+  const oct = id[0] === "_" ? "low" : id[0] === "˙" ? "high" : "mid";
+  return `<span class="n ${oct} ${cls}">${oct === "mid" ? id : id.slice(1)}</span>`;
+}
+function view() { // the window shown: during Listen it follows the lit note, otherwise your step
+  const all = steps(), i = S.listening ? Math.max(0, S.listenIdx) : S.step;
+  return { cur: all[i], next: all.slice(i + 1, i + 4), two: piece().two && !S.timed && part() === "both" };
+}
+function curCls(which) {
+  if (S.listening) return "lit";
+  if (!S.playing) return "ghost";
+  if (S.flash === "hit") return "hitc";
+  if (which && S.halfHeard === which) return "hitc";
+  return "";
+}
+function drum(cls = "") {
+  const s = steps()[S.step] || {}, t = targets(s).filter((x) => x !== S.halfHeard);
+  // approximate placement: alternate left/right around the rim, low tongues nearest you (bottom)
+  const pos = TONGUES.map((id, i) => {
+    const outer = i < 9, j = outer ? i : i - 9;
+    const k = Math.ceil(j / 2) * (j % 2 ? 1 : -1), a = Math.PI / 2 + k * (outer ? 0.7 : 1.05);
+    const r = outer ? 38 : 19;
+    return `<div class="t ${t.includes(id) ? "target" : id === S.wrong ? "wrong" : ""}"
+      style="left:${50 + r * Math.cos(a)}%;top:${50 + r * Math.sin(a)}%">${n(id)}</div>`;
+  });
+  // B keeps the map's space reserved but empty (no tongues) until the hint is due: no always-on aid
+  return `<div class="drum ${cls}">${cls === "idle" ? "" : pos.join("")}</div>`;
+}
+const gear = () => `<button class="gear" title="Settings">⚙</button>`;
+const pname = () => `<button class="pname">${piece().name} ▾<small>${piece().group}${piece().two && !S.timed ? " · " + { melody: "melody line", accomp: "accompaniment line", both: "both lines" }[part()] : ""}</small></button>`;
+const timedSw = () => `<button class="switch ${S.timed ? "on" : ""}" onclick="toggleTimed()"><i></i>Timed</button>`;
+const listenCtl = () => S.listening
+  ? `<span class="speed"><button onclick="speed(-5)">−</button>${S.listenSpeed}<button onclick="speed(5)">+</button></span>
+     <button class="listenbtn" onclick="listen()">■ Stop</button>`
+  : `<button class="listenbtn" onclick="listen()">▶ Listen</button>`;
+const startBtn = (label = S.playing ? "Restart" : "Start") => `<button class="startbtn" onclick="start()">${label}</button>`;
+const msg = () => S.result ? `<div class="result">${S.result}</div>`
+  : `<div class="feedback">${S.feedback ? "That was " + n(S.feedback) : ""}</div>`;
+const beat = () => S.timed && S.playing ? `<span class="beat ${S.beat ? "on" : ""}"></span>` : "";
+const stepHtml = (s, mc = "", ac = "") => `<div class="step"><span class="m">${n(s.m, mc)}</span>${s.a !== undefined && view().two ? `<span class="a">${n(s.a, ac)}</span>` : ""}</div>`;
+
+// ---------- Variant A: Big number ----------
+function VariantA() {
+  const v = view(), c = v.cur || {};
+  const one = !v.two ? (c.m ? "m" : "a") : null;
+  return `<div class="vA">
+    <header>${pname()}${gear()}</header>
+    <div class="stage ${S.hint ? "hinting" : ""}">
+      <div class="cur ${v.two ? "two" : ""} ${S.flash === "miss" ? "shake missc" : ""}">
+        <span class="m">${n(one === "a" ? c.a : c.m, curCls(c.m))}</span>
+        ${v.two ? `<span class="a">${n(c.a, curCls(c.a))}</span>` : ""}
+      </div>
+      <div class="nexts">${v.next.map((s) => stepHtml(s)).join("")}</div>
+      ${S.hint ? `<div class="hint">${drum()}</div>` : ""}
+    </div>
+    ${msg()}
+    <div class="bottom">${listenCtl()}<span>${beat()}</span>${timedSw()}${startBtn()}</div>
+  </div>`;
+}
+
+// ---------- Variant B: Reading strip ----------
+function VariantB() {
+  const v = view(), c = v.cur || {};
+  const strip = v.cur ? `<div class="step cur ${S.flash === "miss" ? "shake" : ""}">
+      <span class="m">${n(v.two || c.m ? c.m : c.a, curCls(c.m))}</span>${v.two ? `<span class="a">${n(c.a, curCls(c.a))}</span>` : ""}</div>`
+    + v.next.map((s, i) => `<div class="step nx nx${i + 1}"><span class="m">${n(v.two || s.m ? s.m : s.a)}</span>${v.two ? `<span class="a">${n(s.a)}</span>` : ""}</div>`).join("") : "";
+  return `<div class="vB">
+    <header>${pname()}${gear()}</header>
+    <div class="tools">${listenCtl()}${beat()}</div>
+    <div style="display:flex;flex-direction:column;justify-content:center;min-height:0">
+      <div class="strip">${strip}</div>${msg()}
+    </div>
+    <div class="map" style="height:200px">${S.timed ? "" : drum(S.hint ? "" : "idle")}</div>
+    <div class="bottom">${startBtn()}${timedSw()}</div>
+  </div>`;
+}
+
+// ---------- Variant C: Card + drawer ----------
+function VariantC() {
+  const v = view(), c = v.cur || {};
+  return `<div class="vC">
+    <div class="top">${pname()}${gear()}</div>
+    <div class="card">
+      <div class="now ${v.two ? "two" : ""} ${S.flash === "miss" ? "shake missc" : ""}">
+        <span class="m">${n(v.two || c.m ? c.m : c.a, curCls(c.m))}</span>
+        ${v.two ? `<span class="a">${n(c.a, curCls(c.a))}</span>` : ""}
+      </div>
+      <div class="rail">${v.next.map((s) => stepHtml(s)).join("")}</div>
+      ${S.hint ? `<div class="hint">${drum()}</div>` : ""}
+    </div>
+    <div class="below">${msg()}</div>
+    <div class="drawer">${listenCtl()}${beat()}${startBtn(S.playing ? "⟲" : "Start")}${timedSw()}</div>
+  </div>`;
+}
+
+// ---------- switcher + wiring ----------
+const params = new URLSearchParams(location.search);
+let variant = VARIANTS[params.get("variant")] ? params.get("variant") : "A";
+function render() {
+  document.getElementById("app").innerHTML = { A: VariantA, B: VariantB, C: VariantC }[variant]();
+  document.getElementById("vlabel").textContent = `${variant} (${VARIANTS[variant]})`;
+  document.getElementById("state").textContent =
+    `piece=${piece().name} part=${S.timed ? "melody(timed)" : part()} step=${S.step + 1}/${steps().length} playing=${S.playing} misses=${S.misses} hint=${S.hint} listen=${S.listening ? S.listenSpeed : "off"} timed=${S.timed}`;
+  if (S.flash === "miss" && !S.timed) setTimeout(() => { if (S.flash === "miss") { S.flash = null; } }, 300);
+}
+function fit() { // keep the prototype bars from covering the design
+  const h = document.getElementById("proto").offsetHeight + 12;
+  const framed = innerWidth >= 700;
+  document.getElementById("app").style.bottom = framed ? "0" : h + "px";
+  document.body.style.paddingBottom = framed ? h + "px" : "0";
+}
+addEventListener("resize", fit);
+function cycle(d) {
+  const keys = Object.keys(VARIANTS);
+  variant = keys[(keys.indexOf(variant) + d + keys.length) % keys.length];
+  params.set("variant", variant); history.replaceState(null, "", "?" + params); render();
+}
+document.getElementById("prev").onclick = () => cycle(-1);
+document.getElementById("next").onclick = () => cycle(1);
+const ACT = { h: hit, m: miss, p: half, f: finish, l: listen, t: toggleTimed, n: nextPiece,
+  1: () => setPart("melody"), 2: () => setPart("accomp"), 3: () => setPart("both") };
+document.getElementById("sim").onclick = (e) => { const k = e.target.dataset?.k; if (k) ACT[k](); };
+addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft") return cycle(-1);
+  if (e.key === "ArrowRight") return cycle(1);
+  ACT[e.key.toLowerCase()]?.();
+});
+render(); fit();
+// ?keys=hmm replays sim keys on load, e.g. to share "a step with the hint up"
+for (const k of params.get("keys") || "") ACT[k]?.();
+</script>
+</body>
+</html>
