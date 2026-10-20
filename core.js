@@ -6,16 +6,24 @@ import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
 const DONE_MS = 1500;      // "done" shows this long before the piece starts again
+const CHORD_MS = 100;      // a chord's tongues must each start sounding this close to the strike
+const RING_ON_MS = 1500;   // the step just played may still ring this long after it was hit
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
 
-// Step mode's tongues, one per step. Until two-line Step mode lands, a two-line piece plays its
-// melody line.
-const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
+// A two-line piece is taught in three parts, in this order. A one-line piece has no part (null).
+const partsOf = (piece) => (piece.lines.accomp?.length ? ["melody", "accomp", "both"] : [null]);
+
+// Step mode's steps in a part: each step is the tongues struck together, melody first.
+function stepsOf(piece, part) {
+  if (part === "both") return piece.both.map((s) => s.tongues);
+  return piece.lines[part === "accomp" ? "accomp" : "melody"].map((n) => [n.tongue]);
+}
 
 const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
 const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
+const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line pieces past their first part
 
 const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
 
@@ -29,17 +37,47 @@ function loadSongs(storage) {
   });
 }
 
+// Each piece's part as saved. Anything corrupt means every piece is in its first part.
+function loadParts(storage) {
+  try {
+    const saved = JSON.parse(storage.getItem(PARTS_KEY));
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch { return {}; }
+}
+
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...EXERCISE_PIECES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
 
+  // The part each piece is in: the saved one, or its first part if none was saved or the saved one
+  // no longer fits the piece.
+  const parts = loadParts(storage);
+  const partOf = (piece) => (partsOf(piece).includes(parts[piece.id]) ? parts[piece.id] : partsOf(piece)[0]);
+  const saveParts = () => storage.setItem(PARTS_KEY, JSON.stringify(parts));
+  function setPart(piece, part) {
+    parts[piece.id] = part;
+    saveParts();
+  }
+  // Deleting a song must forget its part, or a later song given the same id would start in it.
+  // deleteSong (#26) calls this.
+  function forgetPart(pieceId) {
+    if (!(pieceId in parts)) return;
+    delete parts[pieceId];
+    saveParts();
+  }
+
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
     piece: findPiece(storage.getItem(PIECE_KEY)) ?? EXERCISE_PIECES[0],
+    part: null, // the part being played; it changes only when a run starts
     playing: false,
     position: 0,
-    heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
+    heard: false, // the current step's tongue(s) were hit; strikes are ignored until the flash ends
+    partial: null, // the one tongue of a chord heard so far; both must be struck together again
+    firstStrike: true, // nothing but the hit has been struck on the current step yet
+    firstStrikeHits: 0, // steps of this run hit on their first strike
+    lastHit: null, // { tongues, at }: the step just played, which may still be ringing
     feedback: null,
     missSeq: 0,
     done: false, // the piece was finished; strikes are ignored until the next one starts
@@ -48,6 +86,8 @@ export function createPracticeCore({ storage, clock, random }) {
     overlay: null, // null | "pieces" | "editor"
     editor: null, // { text, errors } while the paste box is open
   };
+  state.part = partOf(state.piece);
+  const steps = () => stepsOf(state.piece, state.part);
 
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
@@ -66,11 +106,13 @@ export function createPracticeCore({ storage, clock, random }) {
   function view() {
     const { piece } = state;
     return {
-      // Until two-line Step mode lands, a two-line piece is always in its melody part.
-      piece: { id: piece.id, title: piece.title, group: piece.group, part: piece.lines.accomp ? "melody" : null },
+      piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part },
       playing: state.playing,
-      steps: stepTongues(piece).map((id, i) => ({
-        tongues: [{ id, heard: i < state.position || (i === state.position && state.heard) }],
+      steps: steps().map((tongues, i) => ({
+        tongues: tongues.map((id) => ({
+          id,
+          heard: i < state.position || (i === state.position && (state.heard || state.partial === id)),
+        })),
         missed: false,
       })),
       position: state.position,
@@ -96,24 +138,55 @@ export function createPracticeCore({ storage, clock, random }) {
     }
   }
 
+  function toStep(position) {
+    state.position = position;
+    state.heard = false;
+    state.partial = null;
+    state.firstStrike = true;
+  }
+
   function moveOn(at) {
-    if (state.position + 1 < stepTongues(state.piece).length) {
-      state.position++;
-      state.heard = false;
+    if (state.position + 1 < steps().length) {
+      toStep(state.position + 1);
       return;
     }
     state.done = true;
     state.doneSeq++;
+    // A run of first-strike hits moves a two-line piece on to its next part, from the next run on.
+    // "Both lines" is the last part and stays put. Nothing is asked.
+    const order = partsOf(state.piece);
+    const next = order[order.indexOf(state.part) + 1];
+    if (next && state.firstStrikeHits === steps().length) setPart(state.piece, next);
     // A finished piece starts again; the app never moves on to another piece by itself.
     schedule(DONE_MS, at, toFirstStep);
   }
 
+  // Every run starts here, in the piece's current part.
   function toFirstStep() {
-    state.position = 0;
-    state.heard = false;
+    state.part = partOf(state.piece);
+    toStep(0);
+    state.firstStrikeHits = 0;
     state.feedback = null;
     state.done = false;
     state.timer = null;
+  }
+
+  // What a strike does to the current step: "hit", "partial" (one tongue of a chord), "miss" or
+  // "ignore". Single-note steps go by the detector's verdict (`tongue`); chord steps go by `ranked`.
+  function judge(targets, { tongue, at, ranked }) {
+    if (targets.length === 1 && tongue === targets[0]) return "hit";
+    if (targets.length > 1) {
+      // Struck now, not still ringing from an earlier strike.
+      const fresh = (r) => Math.abs(r.at - at) <= CHORD_MS;
+      const loudest = ranked.slice(0, targets.length);
+      // However close the levels: the chord's tongues are the loudest, all struck together.
+      if (loudest.length === targets.length && loudest.every((r) => targets.includes(r.tongue) && fresh(r))) return "hit";
+      if (targets.includes(ranked[0].tongue)) return fresh(ranked[0]) ? "partial" : "ignore";
+    }
+    // Ring-on: the step just played can still sound for a while, and that's never a miss.
+    const { lastHit } = state;
+    if (lastHit && lastHit.tongues.includes(tongue) && at - lastHit.at <= RING_ON_MS) return "ignore";
+    return "miss";
   }
 
   const commands = {
@@ -156,18 +229,25 @@ export function createPracticeCore({ storage, clock, random }) {
       state.playing = false;
       toFirstStep();
     },
-    strike({ tongue }) {
+    strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
-      const target = stepTongues(state.piece)[state.position];
-      if (tongue === target) {
+      const targets = steps()[state.position];
+      const verdict = judge(targets, { tongue, at, ranked });
+      if (verdict === "ignore") return;
+      if (verdict === "hit") {
         state.heard = true;
         state.feedback = null;
+        if (state.firstStrike) state.firstStrikeHits++;
+        state.lastHit = { tongues: targets, at };
         // The flash is for the eye, so it runs from when the strike arrives, not from its onset
         // (`at`), or a late strike would barely show. Onsets matter once there's a beat (#38).
         schedule(HIT_FLASH_MS, clock(), moveOn);
-      } else {
-        state.feedback = { thatWas: tongue, seq: ++state.missSeq };
+        return;
       }
+      state.firstStrike = false;
+      // Half a chord turns that number green, and the step waits for both tongues together.
+      if (verdict === "partial") state.partial = ranked[0].tongue;
+      else state.feedback = { thatWas: tongue, seq: ++state.missSeq };
     },
   };
 
