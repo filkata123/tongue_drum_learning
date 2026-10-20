@@ -1,11 +1,14 @@
 // The practice core: every Step mode rule, with no DOM, mic or audio output.
 // The screen turns DOM events and detector strikes into commands and renders the view that
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
-import { EXERCISES } from "./notes.js";
+import { EXERCISES, halfOf } from "./notes.js";
 import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
 const DONE_MS = 1500;      // "done" shows this long before the piece starts again
+const HINT_MISSES = 2;     // the Location hint appears after this many misses on a step…
+const HINT_IDLE_MS = 5000; // …or after this long with no strike, whichever comes first
+const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's hint retires
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
@@ -16,6 +19,7 @@ const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
 
 const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
 const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
+const FADE_KEY = "tongue-drum:fade";   // unaided hits in a row, per tongue: { [tongue]: count }
 
 const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
 
@@ -29,10 +33,20 @@ function loadSongs(storage) {
   });
 }
 
+// The fade counts as saved. Anything corrupt means no tongue has faded yet.
+function loadFade(storage) {
+  try {
+    const saved = JSON.parse(storage.getItem(FADE_KEY));
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  } catch { return {}; }
+}
+
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
   const pieces = () => [...EXERCISE_PIECES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
+  const fade = loadFade(storage);
+  const target = () => stepTongues(state.piece)[state.position]; // the current step's tongue
 
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
@@ -42,6 +56,8 @@ export function createPracticeCore({ storage, clock, random }) {
     heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
     feedback: null,
     missSeq: 0,
+    misses: 0, // misses on the current step
+    hint: false, // the Location hint is showing for the current step
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
@@ -63,6 +79,22 @@ export function createPracticeCore({ storage, clock, random }) {
     };
   }
 
+  // The Location hint: the target's half of the drum map with the target lit. A missed tongue on
+  // the other half isn't drawn; "That was X" names it.
+  function hintView() {
+    const half = halfOf(target());
+    const wrong = state.feedback?.thatWas;
+    return { half, lit: [target()], wrong: wrong && halfOf(wrong) === half ? wrong : null };
+  }
+
+  // A tongue's hint retires after enough unaided hits in a row; a miss on it brings it back.
+  const faded = (tongue) => (fade[tongue] ?? 0) >= FADE_HITS;
+
+  function countForFade(tongue, unaided) {
+    fade[tongue] = unaided ? (fade[tongue] ?? 0) + 1 : 0;
+    storage.setItem(FADE_KEY, JSON.stringify(fade));
+  }
+
   function view() {
     const { piece } = state;
     return {
@@ -75,6 +107,7 @@ export function createPracticeCore({ storage, clock, random }) {
       })),
       position: state.position,
       feedback: state.feedback,
+      hint: state.hint ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       overlay: state.overlay === "pieces" ? piecesOverlay()
         : state.overlay === "editor" ? { kind: "editor", pieceId: null, ...state.editor, conversionPrompt: conversionPrompt() }
@@ -96,10 +129,28 @@ export function createPracticeCore({ storage, clock, random }) {
     }
   }
 
+  function newStep(at) {
+    state.heard = false;
+    state.misses = 0;
+    state.hint = false;
+    waitForHint(at);
+  }
+
+  // Shows the hint if nothing is struck for a while. Any strike replaces this timer.
+  function waitForHint(from) {
+    if (state.playing && !state.hint) schedule(HINT_IDLE_MS, from, showHint);
+    else state.timer = null;
+  }
+
+  // A faded tongue gets no hint until a miss on it brings the hint back.
+  function showHint() {
+    if (!faded(target())) state.hint = true;
+  }
+
   function moveOn(at) {
     if (state.position + 1 < stepTongues(state.piece).length) {
       state.position++;
-      state.heard = false;
+      newStep(at);
       return;
     }
     state.done = true;
@@ -108,12 +159,11 @@ export function createPracticeCore({ storage, clock, random }) {
     schedule(DONE_MS, at, toFirstStep);
   }
 
-  function toFirstStep() {
+  function toFirstStep(at = clock()) {
     state.position = 0;
-    state.heard = false;
+    newStep(at);
     state.feedback = null;
     state.done = false;
-    state.timer = null;
   }
 
   const commands = {
@@ -158,8 +208,9 @@ export function createPracticeCore({ storage, clock, random }) {
     },
     strike({ tongue }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
-      const target = stepTongues(state.piece)[state.position];
-      if (tongue === target) {
+      if (tongue === target()) {
+        // A hit made after the hint appeared isn't unaided.
+        countForFade(tongue, !state.hint);
         state.heard = true;
         state.feedback = null;
         // The flash is for the eye, so it runs from when the strike arrives, not from its onset
@@ -167,6 +218,9 @@ export function createPracticeCore({ storage, clock, random }) {
         schedule(HIT_FLASH_MS, clock(), moveOn);
       } else {
         state.feedback = { thatWas: tongue, seq: ++state.missSeq };
+        countForFade(target(), false);
+        if (++state.misses >= HINT_MISSES) showHint();
+        waitForHint(clock());
       }
     },
   };
