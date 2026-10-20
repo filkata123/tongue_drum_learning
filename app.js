@@ -1,5 +1,5 @@
 import { createPracticeCore } from "./core.js";
-import { DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
+import { DRUM_MAP, DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
 import { CONFIG, NoteListener } from "./pitch.js";
 
 const params = new URLSearchParams(location.search);
@@ -9,12 +9,12 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 const $ = (id) => document.getElementById(id);
 const els = {
   start: $("start"), startBtn: $("start-btn"), startError: $("start-error"),
-  play: $("play"), stage: $("stage"), current: $("current"), next: [...$("next").children],
+  play: $("play"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
-  editor: $("editor"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
+  editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
 };
 
@@ -45,6 +45,8 @@ function render(v) {
   // Always three next slots, so the step window never grows or shifts near the end.
   els.next.forEach((el, i) => { el.innerHTML = stepHtml(v.steps[v.position + 1 + i]); });
 
+  if (JSON.stringify(v.hint) !== JSON.stringify(before?.hint)) renderHint(v.hint);
+
   if (!v.feedback) {
     els.stage.classList.remove("miss");
     els.feedback.textContent = "";
@@ -70,8 +72,24 @@ function render(v) {
   if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
 }
 
+// The Location hint: the half of the drum map holding the target (or the whole drum for a chord
+// across both halves), with the target lit and a wrong tongue on that half marked.
+function renderHint(hint) {
+  if (!hint) {
+    els.hint.replaceChildren();
+    return;
+  }
+  const tongues = DRUM_NOTES.map(({ id }) => {
+    const cls = hint.lit.includes(id) ? " lit" : id === hint.wrong ? " wrong" : "";
+    const [x, y] = DRUM_MAP[id];
+    return `<span class="tongue${cls}" style="left:${x}%;top:${y}%">${noteHtml(id)}</span>`;
+  });
+  els.hint.innerHTML = `<div class="half ${hint.half}"><div class="drum">${tongues.join("")}</div></div>`;
+}
+
 // The draft in the paste box is the screen's: the core only gives the starting text.
-function renderEditor({ text, errors }, wasOpen) {
+function renderEditor({ pieceId, text, errors }, wasOpen) {
+  els.editorTitle.textContent = pieceId ? "Edit song" : "Add song";
   if (!wasOpen) {
     els.songText.value = text;
     els.copyPrompt.textContent = "Copy conversion prompt";
@@ -99,9 +117,28 @@ function renderPieces({ groups }) {
       btn.className = `piece${p.current ? " current" : ""}`;
       btn.textContent = p.title;
       btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
-      return btn;
+      if (!p.editable) return btn;
+      // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
+      const row = document.createElement("div");
+      row.className = "song-row";
+      const edit = smallButton("Edit", `Edit ${p.title}`, () => render(core.send({ type: "open", what: "editor", pieceId: p.id })));
+      const del = smallButton("Delete", `Delete ${p.title}`, () => {
+        if (confirm(`Delete "${p.title}"? This can't be undone.`)) render(core.send({ type: "deleteSong", pieceId: p.id }));
+      });
+      row.append(btn, edit, del);
+      return row;
     })];
   }));
+}
+
+function smallButton(text, label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "song-action";
+  btn.textContent = text;
+  btn.setAttribute("aria-label", label);
+  btn.addEventListener("click", onClick);
+  return btn;
 }
 
 els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));

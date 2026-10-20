@@ -537,15 +537,11 @@
       const { t, core } = setup(storage);
       const duet = pickNewSong(core, DUET).piece.id;
       cleanRun(t, core);
-      let deleted = true;
-      try { core.send({ type: "deleteSong", pieceId: duet }); } catch { deleted = false; }
-      if (deleted) {
-        const v = pickNewSong(core, DUET);
-        check("deleting a song removes its part: a new song in its place starts in melody", v.piece.part, "melody");
-        check("…and after a reload too", setup(storage).core.send({ type: "tick" }).piece.part, "melody");
-      } else {
-        out.innerHTML += "TODO deleting a song removes its part (needs deleteSong, #26)\n";
-      }
+      core.send({ type: "deleteSong", pieceId: duet });
+      const v = pickNewSong(core, DUET);
+      check("a new song added after a delete can take the deleted one's id", v.piece.id, duet);
+      check("deleting a song removes its part: the new song starts in melody", v.piece.part, "melody");
+      check("…and after a reload too", setup(storage).core.send({ type: "tick" }).piece.part, "melody");
     }
 
     // The chord rule, on the detector's ranked report. DUET's both part is 3+1, 5+_5, 6+_6.
@@ -643,11 +639,283 @@
       check("a strike without a ranked report still counts on a single-note step", heardIn(v.steps[0]), ["1"]);
     }
 
+    // Edit and delete My songs.
+    function withSongs(core, ...texts) {
+      let v;
+      for (const text of texts) {
+        core.send({ type: "open", what: "editor" });
+        v = core.send({ type: "saveSong", text });
+      }
+      return songsIn(v).map((p) => p.id);
+    }
+
+    {
+      const { core } = setup();
+      const [id] = withSongs(core, "title: Morning tune\nmelody: 3 5 | 6 - |");
+      const v = core.send({ type: "open", what: "editor", pieceId: id });
+      check("Edit reopens the saved text in the paste box",
+        [v.overlay.kind, v.overlay.pieceId, v.overlay.text, v.overlay.errors], ["editor", id, "title: Morning tune\nmelody: 3 5 | 6 - |", []]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [first, second] = withSongs(core, "title: First\nmelody: 1", "title: Second\nmelody: 2");
+      core.send({ type: "open", what: "editor", pieceId: first });
+      let v = core.send({ type: "saveSong", text: "title: First, fixed\nmelody: 1 3 5" });
+      check("saving an edit changes that song in place, back in the piece list",
+        [v.overlay.kind, songsIn(v).map((p) => [p.id, p.title])], ["pieces", [[first, "First, fixed"], [second, "Second"]]]);
+      check("an edited song plays its new notes", core.send({ type: "pick", pieceId: first }).steps.map(ids).join(" "), "1 3 5");
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("an edit is kept after a fresh core on the same storage", songsIn(v).map((p) => p.title), ["First, fixed", "Second"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [id] = withSongs(core, "title: Good\nmelody: 1 2");
+      core.send({ type: "open", what: "editor", pieceId: id });
+      let v = core.send({ type: "saveSong", text: "title: Broken\nmelody: 1 x" });
+      check("a bad edit is refused and stays in the paste box for that song",
+        [v.overlay.kind, v.overlay.pieceId, v.overlay.errors.length], ["editor", id, 1]);
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("a bad edit isn't saved", songsIn(v).map((p) => p.title), ["Good"]);
+      core.send({ type: "saveSong", text: "title: Better\nmelody: 1 3" });
+      v = core.send({ type: "open", what: "pieces" });
+      check("fixing a refused edit saves it over the same song, not as a new one", songsIn(v).map((p) => [p.id, p.title]), [[id, "Better"]]);
+    }
+
+    {
+      const { core } = setup();
+      const [id] = withSongs(core, "title: Playing\nmelody: 1 2 3");
+      core.send({ type: "pick", pieceId: id });
+      core.send({ type: "start" });
+      core.send({ type: "open", what: "pieces" });
+      core.send({ type: "open", what: "editor", pieceId: id });
+      core.send({ type: "saveSong", text: "title: Playing, edited\nmelody: 5 6" });
+      const v = core.send({ type: "close" });
+      check("editing the current song shows its new notes from the first step, waiting for Start",
+        [v.piece.title, v.steps.map(ids).join(" "), v.position, v.playing], ["Playing, edited", "5 6", 0, false]);
+    }
+
+    {
+      const { core } = setup();
+      let threw = false;
+      try { core.send({ type: "open", what: "editor", pieceId: core.send({ type: "tick" }).piece.id }); } catch { threw = true; }
+      check("editing an exercise throws", threw, true);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [keep, gone] = withSongs(core, "title: Keep\nmelody: 1", "title: Gone\nmelody: 2");
+      core.send({ type: "open", what: "pieces" });
+      let v = core.send({ type: "deleteSong", pieceId: gone });
+      check("a deleted song leaves My songs, and the piece list stays open",
+        [v.overlay.kind, songsIn(v).map((p) => p.id)], ["pieces", [keep]]);
+      v = setup(storage).core.send({ type: "open", what: "pieces" });
+      check("a deleted song is gone after a fresh core on the same storage", songsIn(v).map((p) => p.title), ["Keep"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      const [id] = withSongs(core, "title: Current\nmelody: 3 5 6");
+      const firstExercise = core.send({ type: "open", what: "pieces" }).overlay.groups[0].pieces[0];
+      core.send({ type: "pick", pieceId: id });
+      core.send({ type: "start" });
+      core.send({ type: "open", what: "pieces" });
+      let v = core.send({ type: "deleteSong", pieceId: id });
+      check("deleting the current song makes the first exercise current, waiting for Start",
+        [v.piece.id, v.position, v.playing], [firstExercise.id, 0, false]);
+      v = setup(storage).core.send({ type: "tick" });
+      check("after deleting the current song, a fresh core starts on the first exercise", v.piece.id, firstExercise.id);
+    }
+
+    {
+      const { core } = setup();
+      const [a, b] = withSongs(core, "title: A\nmelody: 1", "title: B\nmelody: 2");
+      core.send({ type: "pick", pieceId: a });
+      core.send({ type: "deleteSong", pieceId: b });
+      core.send({ type: "open", what: "editor" });
+      const v = core.send({ type: "saveSong", text: "title: C\nmelody: 3" });
+      check("deleting another song leaves the current one alone", v.piece.id, a);
+      check("a song can be added after a delete", songsIn(v).map((p) => p.title), ["A", "C"]);
+    }
+
+    {
+      const { core } = setup();
+      const exercise = core.send({ type: "tick" }).piece.id;
+      const throws = (cmd) => { try { core.send(cmd); return false; } catch { return true; } };
+      check("deleting an exercise or an unknown piece throws",
+        [throws({ type: "deleteSong", pieceId: exercise }), throws({ type: "deleteSong", pieceId: "song-99" })], [true, true]);
+    }
+
     {
       const { core } = setup();
       let threw = false;
       try { core.send({ type: "dance" }); } catch { threw = true; }
       check("an unknown command throws", threw, true);
+    }
+
+    // The Location hint. `1` sits on the drum's right half, `7` and `5` on its left.
+    function playSong(text, storage) {
+      const s = setup(storage);
+      s.core.send({ type: "open", what: "editor" });
+      const v = s.core.send({ type: "saveSong", text });
+      s.core.send({ type: "pick", pieceId: songsIn(v).at(-1).id });
+      s.core.send({ type: "start" });
+      return s;
+    }
+    const HINT_SONG = "title: Hint test\nmelody: 1 7 1 7 1 7 1 7";
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      let v = core.send({ type: "tick" });
+      check("a step starts with no hint", v.hint, null);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("one miss shows only 'That was', no hint", [v.feedback.thatWas, v.hint], ["3", null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("the 2nd miss shows the target's half with the target lit",
+        v.hint, { half: "right", lit: ["1"], wrong: "3" });
+      v = core.send({ type: "strike", tongue: "7", at: t.now });
+      check("a miss on the other half still shows the target's half, without the wrong tongue",
+        [v.feedback.thatWas, v.hint], ["7", { half: "right", lit: ["1"], wrong: null }]);
+      t.now += 20000;
+      check("the hint stays while the step isn't hit", core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      v = core.send({ type: "tick" });
+      check("the next step starts with no hint", [v.position, v.hint], [1, null]);
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a left-half target shows the left half", v.hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 4999;
+      check("no hint just before 5 s with no strike", core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check("the hint appears after 5 s with no strike", core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 300;
+      core.send({ type: "tick" }); // on step 2 now
+      t.now += 3000;
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      t.now += 4999;
+      check("a miss starts the 5 s over", core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check("5 s after the miss, the hint appears, still naming nothing on the other half",
+        core.send({ type: "tick" }).hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = setup();
+      t.now += 60000;
+      check("no hint before Start, however long you wait", core.send({ type: "tick" }).hint, null);
+    }
+
+    // The fade. Strikes a tongue and waits out the hit flash.
+    function strikeAndWait(t, core, tongue) {
+      core.send({ type: "strike", tongue, at: t.now });
+      t.now += 300;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = playSong(HINT_SONG, storage);
+      for (const tongue of ["1", "7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 60000;
+      let v = core.send({ type: "tick" });
+      check("after 3 unaided hits, the hint stops appearing for that tongue", [v.position, v.hint], [6, null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a miss on a faded tongue shows only 'That was'", [v.feedback.thatWas, v.hint], ["3", null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now });
+      check("a miss on a faded tongue brings its hint back", v.hint, { half: "right", lit: ["1"], wrong: "3" });
+
+      const fresh = playSong(HINT_SONG, storage);
+      fresh.t.now += 4000;
+      strikeAndWait(fresh.t, fresh.core, "1");
+      fresh.t.now += 60000;
+      v = fresh.core.send({ type: "tick" });
+      check("fade counts survive a fresh core on the same storage", [v.position, v.hint], [1, null]);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      strikeAndWait(t, core, "1"); // after the hint appeared
+      for (const tongue of ["7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 5000;
+      check("a hit after the hint appeared doesn't count towards the fade",
+        core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      strikeAndWait(t, core, "1");
+      strikeAndWait(t, core, "7");
+      core.send({ type: "strike", tongue: "3", at: t.now }); // one miss, no hint yet
+      for (const tongue of ["1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 5000;
+      check("a miss resets the run of unaided hits",
+        core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      check("the hint is showing before Restart", core.send({ type: "tick" }).hint === null, false);
+      check("Restart takes the hint away", core.send({ type: "start" }).hint, null);
+      t.now += 5000;
+      core.send({ type: "pick", pieceId: "d-major-scale" });
+      t.now += 60000;
+      check("picking a piece takes the hint away until Start", core.send({ type: "tick" }).hint, null);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG, fakeStorage({ "tongue-drum:fade": "{oops" }));
+      t.now += 5000;
+      check("corrupt fade counts mean no tongue has faded", core.send({ type: "tick" }).hint?.lit, ["1"]);
+    }
+
+    // The Location hint with two-line pieces.
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      core.send({ type: "start" });
+      t.now += 5000; // the hint appears on the first step
+      playThrough(t, core);
+      t.now += 1500;
+      check("a run where the hint was shown isn't all first-strike hits, so it stays in its part",
+        core.send({ type: "tick" }).piece.part, "melody");
+    }
+
+    {
+      const { t, core } = inBoth(); // the first step is 3+1, both on the right half
+      t.now += 5000;
+      check("the hint on a chord step lights both tongues", core.send({ type: "tick" }).hint, { half: "right", lit: ["3", "1"], wrong: null });
+      core.send({ type: "start" });
+      core.send(report(t, ["3", 0]));
+      const v = core.send(report(t, ["3", 0]));
+      check("after half a chord twice, the hint lights only the missing tongue", v.hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, "title: Wide\nmelody: 7 7\naccomp: 1 1"); // 7 on the left half, 1 on the right
+      cleanRun(t, core);
+      cleanRun(t, core);
+      core.send({ type: "start" });
+      t.now += 5000;
+      check("the hint on a chord across both halves shows the whole drum",
+        core.send({ type: "tick" }).hint, { half: "whole", lit: ["7", "1"], wrong: null });
     }
 
     const failed = results.filter((r) => !r.ok).length;

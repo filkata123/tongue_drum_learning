@@ -93,7 +93,27 @@ header {
   font-weight: 700;
   line-height: 1;
 }
-#hint { align-self: stretch; }
+/* The Location hint: a window onto the target's half of the drum map, cut and faded at the
+   middle. It spans ~65% of the drum, so the tongues near the middle line aren't cut off. */
+#hint { align-self: center; font-size: 1rem; font-weight: 400; }
+#hint .half { position: relative; overflow: hidden; width: 100%; aspect-ratio: 0.65; }
+#hint .half.left { mask-image: linear-gradient(to right, #000 78%, transparent); }
+#hint .half.right { mask-image: linear-gradient(to left, #000 78%, transparent); }
+#hint .drum {
+  position: absolute; top: 0; width: 153.8%; aspect-ratio: 1;
+  border-radius: 50%; background: #1f2937; border: 2px solid #374151;
+}
+#hint .half.right .drum { left: -53.8%; }
+/* A chord whose tongues sit on different halves shows the whole drum. */
+#hint .half.whole { aspect-ratio: 1; }
+#hint .half.whole .drum { width: 100%; }
+#hint .tongue {
+  position: absolute; width: 13%; height: 13%; transform: translate(-50%, -50%);
+  border-radius: 40%; background: #374151; color: #6b7280;
+  display: flex; align-items: center; justify-content: center; font-size: 0.8em; font-weight: 700;
+}
+#hint .tongue.lit { background: #fde047; color: #111827; }
+#hint .tongue.wrong { background: #f87171; color: #111827; }
 
 /* A step: its tongues stacked, melody over accompaniment, the lower one smaller.
    No line or octave colours: green only ever means "heard". */
@@ -231,6 +251,18 @@ footer {
   cursor: pointer;
 }
 #pieces .piece.current { border-color: #9ca3af; }
+#pieces .song-row { display: flex; gap: 0.5rem; align-items: stretch; margin: 0 0 0.5rem; }
+#pieces .song-row .piece { flex: 1; min-width: 0; margin: 0; }
+#pieces .song-action {
+  font: inherit;
+  font-size: 0.95rem;
+  color: #9ca3af;
+  background: none;
+  border: 2px solid #374151;
+  border-radius: 0.5rem;
+  padding: 0 0.8rem;
+  cursor: pointer;
+}
 #add-song {
   font: inherit;
   font-size: 1.1rem;
