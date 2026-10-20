@@ -51,6 +51,11 @@ A mode where notes must be hit in time with a beat. The beat keeps going whether
 a missed note is marked and the sheet moves on.
 _Avoid_: Rhythm mode
 
+**Locked tempo**:
+A tempo you've picked for a piece yourself. Timed mode keeps to it and stops speeding up or
+slowing down until you hand the tempo back to the app.
+_Avoid_: Fixed tempo, custom speed
+
 **Listen**:
 The app plays the part you're practising, with each number lit as it sounds. Only ever on
 request; it never plays by itself.
