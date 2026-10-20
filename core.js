@@ -3,6 +3,7 @@
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
 import { EXERCISES, halfOf } from "./notes.js";
 import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
+import { MADE_UP_TUNES, makeUpTune } from "./tunes.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
 const DONE_MS = 1500;      // "done" shows this long before the piece starts again
@@ -14,6 +15,9 @@ const RING_ON_MS = 1500;   // the step just played may still ring this long afte
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
+// The made-up tunes come after them. Listed, a made-up tune is only its row; the tune itself is
+// made up fresh whenever it's picked or finished (see `practise`).
+const ALL_EXERCISES = [...EXERCISE_PIECES, ...MADE_UP_TUNES.map((t) => ({ ...t, group: "exercise" }))];
 
 // A two-line piece is taught in three parts, in this order. A one-line piece has no part (null).
 const partsOf = (piece) => (piece.lines.accomp?.length ? ["melody", "accomp", "both"] : [null]);
@@ -57,8 +61,12 @@ function loadHints(storage) {
 
 export function createPracticeCore({ storage, clock, random }) {
   const songs = loadSongs(storage);
-  const pieces = () => [...EXERCISE_PIECES, ...songs];
+  const pieces = () => [...ALL_EXERCISES, ...songs];
   const findPiece = (id) => pieces().find((p) => p.id === id);
+  // The piece to practise for a listed one: a made-up tune is made up now, anything else is as is.
+  const practise = (piece) => piece?.row
+    ? { ...piece, ...parseSongText(`title: ${piece.title}\nmelody: ${makeUpTune(piece.row, random).join(" ")}`) }
+    : piece;
   const fade = loadObject(storage, FADE_KEY); // no saved counts means no tongue has faded yet
   let hintsOn = loadHints(storage);
   const targets = () => steps()[state.position]; // the current step's tongues
@@ -96,7 +104,7 @@ export function createPracticeCore({ storage, clock, random }) {
 
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
-    piece: findPiece(storage.getItem(PIECE_KEY)) ?? EXERCISE_PIECES[0],
+    piece: practise(findPiece(storage.getItem(PIECE_KEY))) ?? EXERCISE_PIECES[0],
     part: null, // the part being played; it changes only when a run starts
     playing: false,
     position: 0,
@@ -119,13 +127,13 @@ export function createPracticeCore({ storage, clock, random }) {
 
   // The piece list: Exercises, then My songs.
   function piecesOverlay() {
-    const entry = (p) => ({ id: p.id, title: p.title, current: p === state.piece, editable: p.group === "my-song", mark: null, tempo: null });
+    const entry = (p) => ({ id: p.id, title: p.title, current: p.id === state.piece.id, editable: p.group === "my-song", mark: null, tempo: null });
     return {
       kind: "pieces",
       found: "",
       averages: [],
       groups: [
-        { title: "Exercises", pieces: EXERCISE_PIECES.map(entry) },
+        { title: "Exercises", pieces: ALL_EXERCISES.map(entry) },
         { title: "My songs", pieces: songs.map(entry) },
       ],
     };
@@ -220,8 +228,12 @@ export function createPracticeCore({ storage, clock, random }) {
     const order = partsOf(state.piece);
     const next = order[order.indexOf(state.part) + 1];
     if (next && state.firstStrikeHits === steps().length) setPart(state.piece, next);
-    // A finished piece starts again; the app never moves on to another piece by itself.
-    schedule(DONE_MS, at, toFirstStep);
+    // A finished piece starts again; the app never moves on to another piece by itself. A finished
+    // made-up tune makes way for a new one.
+    schedule(DONE_MS, at, (from) => {
+      state.piece = practise(findPiece(state.piece.id));
+      toFirstStep(from);
+    });
   }
 
   // Every run starts here, in the piece's current part.
@@ -320,7 +332,7 @@ export function createPracticeCore({ storage, clock, random }) {
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
       if (!piece) throw new Error(`Unknown piece: ${pieceId}`);
-      state.piece = piece;
+      state.piece = practise(piece);
       storage.setItem(PIECE_KEY, piece.id);
       state.overlay = null;
       // Picking abandons any run: the learner is the one who presses Start.
