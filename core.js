@@ -33,6 +33,14 @@ const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order
 const FADE_KEY = "tongue-drum:fade";   // unaided hits in a row, per tongue: { [tongue]: count }
 const PARTS_KEY = "tongue-drum:parts"; // { [pieceId]: part }, for two-line pieces past their first part
 const HINTS_KEY = "tongue-drum:hints"; // the gear's "Location hints" switch: true | false
+// Cold-run scores: { [pieceId]: { [part]: { [day]: [hits, steps] } } }; a one-line piece's go under "melody"
+const SCORES_KEY = "tongue-drum:scores";
+
+// The local calendar day of a clock time, as "2026-10-20", so days sort as text.
+function dayOf(ms) {
+  const d = new Date(ms);
+  return [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+}
 
 const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
 
@@ -83,9 +91,24 @@ export function createPracticeCore({ storage, clock, random }) {
     saveParts();
   }
 
+  // Cold runs: the first finished run of a piece in one part on a day is scored and saved. Later
+  // runs that day are only shown. Returns the finished run's result line.
+  const scores = loadObject(storage, SCORES_KEY);
+  const saveScores = () => storage.setItem(SCORES_KEY, JSON.stringify(scores));
+  function scoreRun(at) {
+    const run = [state.firstStrikeHits, steps().length];
+    const days = ((scores[state.piece.id] ??= {})[state.part ?? "melody"] ??= {});
+    const today = dayOf(at);
+    if (today in days) return `again: ${run.join("/")}`;
+    const before = Object.keys(days).sort().at(-1);
+    days[today] = run;
+    saveScores();
+    return `First run today: ${run.join("/")}` + (before ? ` · last time ${days[before].join("/")}` : "");
+  }
+
   const saveSongs = () => storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
   // The one place a deleted piece's stored data goes: its song text, its being the piece last
-  // picked, and its part. Anything stored per piece later (scores, tempo) must be removed here too.
+  // picked, its part and its scores. Anything stored per piece later (tempo) must be removed here too.
   function forgetPiece(id) {
     songs.splice(songs.findIndex((s) => s.id === id), 1);
     saveSongs();
@@ -93,6 +116,10 @@ export function createPracticeCore({ storage, clock, random }) {
     if (id in parts) {
       delete parts[id];
       saveParts();
+    }
+    if (id in scores) {
+      delete scores[id];
+      saveScores();
     }
   }
   // Only My songs can be edited or deleted; asking for anything else is a programming error.
@@ -113,6 +140,7 @@ export function createPracticeCore({ storage, clock, random }) {
     firstStrikeHits: 0, // steps of this run hit on their first strike, with no hint shown
     lastHit: null, // { tongues, at }: the step just played, which may still be ringing
     feedback: null,
+    result: null, // { score, missed, tempo }: the finished run's line, until the next run's first strike
     missSeq: 0,
     misses: 0, // misses on the current step, half a chord included
     hint: false, // the Location hint is showing for the current step
@@ -174,6 +202,7 @@ export function createPracticeCore({ storage, clock, random }) {
       feedback: state.feedback,
       hint: state.hint ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
+      result: state.result,
       overlay: state.overlay === "pieces" ? piecesOverlay()
         : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: null }
         : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
@@ -223,6 +252,7 @@ export function createPracticeCore({ storage, clock, random }) {
     }
     state.done = true;
     state.doneSeq++;
+    state.result = { score: scoreRun(at), missed: [], tempo: null };
     // A run of first-strike hits moves a two-line piece on to its next part, from the next run on.
     // "Both lines" is the last part and stays put. Nothing is asked.
     const order = partsOf(state.piece);
@@ -294,6 +324,7 @@ export function createPracticeCore({ storage, clock, random }) {
         if (state.piece.id === pieceId) {
           state.piece = songs[i];
           state.playing = false;
+          state.result = null;
           toFirstStep();
         }
       } else {
@@ -311,6 +342,7 @@ export function createPracticeCore({ storage, clock, random }) {
       if (state.piece.id === pieceId) {
         state.piece = EXERCISE_PIECES[0];
         state.playing = false;
+        state.result = null;
         toFirstStep();
       }
       if (state.editor?.pieceId === pieceId) {
@@ -335,12 +367,15 @@ export function createPracticeCore({ storage, clock, random }) {
       state.piece = practise(piece);
       storage.setItem(PIECE_KEY, piece.id);
       state.overlay = null;
-      // Picking abandons any run: the learner is the one who presses Start.
+      // Picking abandons any run: the learner is the one who presses Start. The last piece's
+      // result line goes with it.
       state.playing = false;
+      state.result = null;
       toFirstStep();
     },
     strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
+      state.result = null; // the last run's line goes once the next one is under way
       const verdict = judge(targets(), { tongue, at, ranked });
       if (verdict === "ignore") return;
       if (verdict === "hit") {

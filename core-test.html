@@ -1163,6 +1163,129 @@
       check("with hints off, no hint after half a chord twice", v.hint, null);
     }
 
+    // Cold runs: the first finished run of a piece in one part on a day is scored and saved.
+    const SHORT = "title: Short\nmelody: 1 2 3 5";
+
+    // Plays one run of the current piece from Start with `misses` wrong strikes on its first step,
+    // and waits out done.
+    function runWithMisses(t, core, misses = 0) {
+      core.send({ type: "start" });
+      for (let i = 0; i < misses; i++) core.send({ type: "strike", tongue: "7", at: t.now });
+      playThrough(t, core);
+      t.now += 1500;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      pickNewSong(core, SHORT);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now }); // the first step isn't a first-strike hit
+      let v = playThrough(t, core);
+      check("the first finished run of the day shows its score", v.result?.score, "First run today: 3/4");
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      check("the result line stays after the piece starts again", [v.position, v.result?.score], [0, "First run today: 3/4"]);
+      v = runWithMisses(t, core, 0);
+      check("a later run that day shows just 'again:'", v.result?.score, "again: 4/4");
+      const tomorrow = setup(storage); // a fresh core on the same storage, a day later
+      tomorrow.t.now += 24 * 3600 * 1000;
+      v = runWithMisses(tomorrow.t, tomorrow.core, 0);
+      check("a later run isn't saved: tomorrow's 'last time' is the cold run", v.result?.score, "First run today: 4/4 · last time 3/4");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      runWithMisses(t, core, 1);
+      t.now = new Date(2026, 9, 20, 23, 58).getTime();
+      check("late the same evening is still the same day", runWithMisses(t, core, 0).result?.score, "again: 4/4");
+      t.now = new Date(2026, 9, 21, 0, 1).getTime();
+      check("just past local midnight is a new day", runWithMisses(t, core, 0).result?.score, "First run today: 4/4 · last time 3/4");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      runWithMisses(t, core, 0);
+      let v = core.send({ type: "start" });
+      check("Restart keeps the result line until a strike", v.result?.score, "First run today: 4/4");
+      v = core.send({ type: "strike", tongue: "7", at: t.now });
+      check("the next run's first strike clears the result line, a miss too", v.result, null);
+      runWithMisses(t, core, 0);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("…and so does a hit", v.result, null);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now });
+      strikeAndWait(t, core, "1");
+      strikeAndWait(t, core, "2");
+      let v = runWithMisses(t, core, 0); // Restart, mid-run
+      check("a run abandoned by Restart isn't scored", v.result?.score, "First run today: 4/4");
+    }
+
+    {
+      const { t, core } = setup();
+      const short = pickNewSong(core, SHORT).piece.id;
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now });
+      strikeAndWait(t, core, "1");
+      core.send({ type: "pick", pieceId: "bells-two-lines" });
+      core.send({ type: "pick", pieceId: short });
+      const v = runWithMisses(t, core, 0);
+      check("a run abandoned by picking another piece isn't scored", v.result?.score, "First run today: 4/4");
+      check("picking another piece takes the result line away", core.send({ type: "pick", pieceId: "bells-two-lines" }).result, null);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      let v = runWithMisses(t, core, 0);
+      check("the melody part's cold run", [v.piece.part, v.result?.score], ["accomp", "First run today: 3/3"]);
+      v = runWithMisses(t, core, 1);
+      check("each part has its own cold run on the same day", [v.piece.part, v.result?.score], ["accomp", "First run today: 2/3"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      runWithMisses(t, core, 0); // melody, then on to accomp
+      runWithMisses(t, core, 1); // accomp: 2/3
+      const tomorrow = setup(storage);
+      tomorrow.t.now += 24 * 3600 * 1000;
+      const v = runWithMisses(tomorrow.t, tomorrow.core, 0); // accomp again, now moving on to both
+      check("'last time' comes from the same part", v.result?.score, "First run today: 3/3 · last time 2/3");
+      core.send({ type: "deleteSong", pieceId: duet });
+      check("deleting the current song takes its result line away", core.send({ type: "tick" }).result, null);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const short = pickNewSong(core, SHORT).piece.id;
+      runWithMisses(t, core, 1);
+      core.send({ type: "deleteSong", pieceId: short });
+      check("deleting a song removes its scores from storage", JSON.parse(storage.getItem("tongue-drum:scores"))[short], undefined);
+      pickNewSong(core, SHORT); // a new song can take the deleted one's id
+      const v = runWithMisses(t, core, 0);
+      check("…so a new song with the deleted one's id starts with no score", v.result?.score, "First run today: 4/4");
+      core.send({ type: "open", what: "editor", pieceId: short });
+      core.send({ type: "saveSong", text: "title: Short\nmelody: 1 2 3" });
+      check("editing the current song takes its result line away", core.send({ type: "close" }).result, null);
+    }
+
+    {
+      const { t, core } = setup(fakeStorage({ "tongue-drum:scores": "{oops" }));
+      pickNewSong(core, SHORT);
+      check("corrupt saved scores mean no scores, not a crash", runWithMisses(t, core, 0).result?.score, "First run today: 4/4");
+    }
+
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
     window.testResults = { failed, out: out.textContent };
