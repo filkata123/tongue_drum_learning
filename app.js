@@ -13,10 +13,12 @@ const els = {
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
-  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), piecesProgress: $("pieces-progress"), addSong: $("add-song"),
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
   gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
+  listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
+  listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
   timedSwitch: $("timed-switch"),
 };
 
@@ -77,11 +79,16 @@ function render(v) {
     void els.current.offsetWidth; // restart the pulse animation
     els.current.classList.add("beat");
   }
-  if (v.sound?.key !== before?.sound?.key) playSound(v.sound);
 
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
   els.result.innerHTML = els.doneResult.innerHTML = resultHtml(v.result);
+
+  els.listenBtn.textContent = v.listen.playing ? "■ Stop" : "▶ Listen";
+  els.listenBtn.classList.toggle("playing", v.listen.playing);
+  els.listenSpeed.hidden = !v.listen.playing;
+  els.listenBpm.textContent = `♩ ${v.listen.speed}`;
+  if (v.sound?.key !== before?.sound?.key) playSound(v.sound);
 
   els.restartBtn.textContent = v.playing ? "Restart" : "Start";
   els.restartBtn.classList.toggle("start", !v.playing);
@@ -128,7 +135,14 @@ function renderEditor({ pieceId, text, errors }, wasOpen) {
   }));
 }
 
-function renderPieces({ groups }) {
+function renderPieces({ found, averages, groups }) {
+  // Progress shows only here: tongues found without help and the made-up tune averages on top,
+  // each piece's latest cold run beside its title.
+  els.piecesProgress.replaceChildren(...[found, ...averages].map((line) => {
+    const p = document.createElement("p");
+    p.textContent = line;
+    return p;
+  }));
   els.piecesGroups.replaceChildren(...groups.flatMap((g) => {
     const title = document.createElement("h2");
     title.textContent = g.title;
@@ -143,6 +157,12 @@ function renderPieces({ groups }) {
       btn.type = "button";
       btn.className = `piece${p.current ? " current" : ""}`;
       btn.textContent = p.title;
+      if (p.mark) {
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        mark.textContent = p.mark;
+        btn.append(mark);
+      }
       btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
       if (!p.editable) return btn;
       // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
@@ -186,36 +206,69 @@ els.gearClose.addEventListener("click", () => render(core.send({ type: "close" }
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
 els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
+els.listenBtn.addEventListener("click", () => render(core.send({ type: "listen" })));
+els.listenSlower.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: -1 })));
+els.listenFaster.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: 1 })));
 
 // --- Audio ---------------------------------------------------------------
 
 let audio = null; // the AudioContext, once Start has opened it
-let scheduled = []; // sources playing or waiting to play the core's current `sound`
 
-// Plays the core's sound events, cancelling whatever the last ones scheduled. Event times are on
-// the core's clock (Date.now), moved onto the audio clock here.
-function playSound(sound) {
-  scheduled.forEach((src) => { try { src.stop(); } catch { /* already stopped */ } });
-  scheduled = [];
-  if (!sound || !audio) return;
-  const now = Date.now();
-  for (const e of sound.events) {
-    const when = Math.max(audio.currentTime, audio.currentTime + (e.at - now) / 1000);
-    if (e.kind === "click") scheduled.push(click(when));
-  }
+// A drum-like voice: a soft-mallet attack and a ringing tone whose overtones die away first,
+// fading out over about the note's length. Returns its parts so it can be cancelled.
+function drumNote(ctx, out, tongue, when, ms) {
+  const f = NOTE_BY_ID[tongue].freq;
+  const ring = Math.min(2.5, Math.max(0.4, (ms / 1000) * 1.5));
+  return [[1, 0.3, 1], [2, 0.05, 0.35], [3, 0.025, 0.2]].map(([mult, amp, decay]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = f * mult;
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(amp, when + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + ring * decay);
+    osc.connect(gain).connect(out);
+    osc.start(when);
+    osc.stop(when + ring * decay + 0.05);
+    return { osc, gain, when };
+  });
 }
 
-// A count-in click: a short, high tick, well above the drum's notes.
-function click(when) {
-  const osc = audio.createOscillator();
-  const gain = audio.createGain();
+// A Timed run's count-in click: a short, high tick, well above the drum's notes.
+function click(ctx, out, when) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
   osc.frequency.value = 2000;
   gain.gain.setValueAtTime(0.4, when);
   gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
-  osc.connect(gain).connect(audio.destination);
+  osc.connect(gain).connect(out);
   osc.start(when);
   osc.stop(when + 0.05);
-  return osc;
+  return { osc, gain, when };
+}
+
+// Listen's notes and the Timed count-in. The core says what to play and when, on its clock; a new
+// key replaces whatever was scheduled. Notes already ringing carry on unless the sound stops altogether.
+let voices = [];
+function playSound(sound) {
+  if (!audio) return;
+  const now = audio.currentTime;
+  for (const v of voices) {
+    if (v.when > now) v.osc.stop();
+    else if (!sound) {
+      const g = v.gain.gain; // a quick fade, from wherever the ring has got to
+      (g.cancelAndHoldAtTime ?? g.cancelScheduledValues).call(g, now);
+      g.setTargetAtTime(0, now, 0.03);
+      v.osc.stop(now + 0.2);
+    }
+  }
+  voices = [];
+  if (!sound) return;
+  const offset = now - Date.now() / 1000; // clock ms → audio seconds
+  for (const e of sound.events) {
+    const when = Math.max(now, e.at / 1000 + offset);
+    if (e.kind === "note") voices.push(...drumNote(audio, audio.destination, e.tongue, when, e.ms));
+    if (e.kind === "click") voices.push(click(audio, audio.destination, when));
+  }
 }
 
 async function openInput(ctx) {
@@ -360,9 +413,9 @@ els.startBtn.addEventListener("click", async () => {
   try {
     const ctx = new AudioContext();
     await ctx.resume();
-    audio = ctx;
     const input = await openInput(ctx);
     await listen(ctx, input);
+    audio = ctx;
   } catch (err) {
     els.startError.textContent = window.isSecureContext
       ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`

@@ -1286,6 +1286,304 @@
       check("corrupt saved scores mean no scores, not a crash", runWithMisses(t, core, 0).result?.score, "First run today: 4/4");
     }
 
+    // Made-up tune scores: every finished tune is saved, per exercise, with an average of the last 10.
+
+    // Plays the showing made-up tune from Start, with one wrong strike on each of its first `missed`
+    // steps, and waits out done (by then the next tune is showing). The wrong tongue is neither the
+    // target nor the step just played, which may still be ringing.
+    function playTune(t, core, missed = 0) {
+      let v = core.send({ type: "start" });
+      while (!v.done) {
+        const target = v.steps[v.position].tongues[0].id;
+        if (v.position < missed) {
+          const before = v.steps[v.position - 1]?.tongues[0].id;
+          const wrong = ["2", "4", "6"].find((tg) => tg !== target && tg !== before);
+          core.send({ type: "strike", tongue: wrong, at: t.now });
+        }
+        core.send({ type: "strike", tongue: target, at: t.now });
+        t.now += 300;
+        v = core.send({ type: "tick" });
+      }
+      t.now += 1500;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = seededCore(5, storage);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      check("the first made-up tune shows just its score", playTune(t, core, 1).result?.score, "7/8");
+      check("the next one that day is saved too, and shows the average",
+        playTune(t, core, 0).result?.score, "8/8 · your recent average 7.5/8");
+      check("…and the one after", playTune(t, core, 2).result?.score, "6/8 · your recent average 7/8");
+      const later = seededCore(6, storage);
+      check("the scores survive a new core on the same storage", playTune(later.t, later.core, 0).result?.score,
+        "8/8 · your recent average 7.3/8");
+      check("made-up tunes aren't scored as cold runs",
+        JSON.parse(storage.getItem("tongue-drum:scores") ?? "{}")["made-up-whole"], undefined);
+    }
+
+    {
+      const { t, core } = seededCore(9);
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      playTune(t, core, 8); // 0/8
+      let v;
+      for (let i = 0; i < 9; i++) v = playTune(t, core, 0);
+      check("the average covers the last 10 tunes", v.result?.score, "8/8 · your recent average 7.2/8");
+      v = playTune(t, core, 0);
+      check("…and only those: the 11th tune ago drops out", v.result?.score, "8/8 · your recent average 8/8");
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      check("the other exercise keeps its own scores", playTune(t, core, 4).result?.score, "4/8");
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      check("…and doesn't count towards this one's average", playTune(t, core, 2).result?.score, "6/8 · your recent average 7.8/8");
+    }
+
+    {
+      const { t, core } = seededCore(4, fakeStorage({ "tongue-drum:tunes": "{oops" }));
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      check("corrupt saved tune scores mean none, not a crash", playTune(t, core, 1).result?.score, "7/8");
+    }
+
+    // Progress marks in the piece list: each piece's latest cold run for its current part.
+    const markOf = (core, pieceId) => core.send({ type: "open", what: "pieces" }).overlay.groups
+      .flatMap((g) => g.pieces).find((p) => p.id === pieceId).mark;
+    const nextDay = (t) => { t.now += 24 * 3600 * 1000; };
+
+    {
+      const { t, core } = setup();
+      const short = pickNewSong(core, SHORT).piece.id;
+      check("a piece with no cold run shows no mark", markOf(core, short), null);
+      check("…and nor does an exercise never played", markOf(core, "d-major-scale"), null);
+      core.send({ type: "close" });
+      runWithMisses(t, core, 1);
+      check("the first cold run shows its score, with no trend", markOf(core, short), "3/4");
+      core.send({ type: "close" });
+      runWithMisses(t, core, 0);
+      check("later runs that day don't change the mark", markOf(core, short), "3/4");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 0);
+      check("a better cold run than the one before is marked ↑", markOf(core, short), "4/4 ↑");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 1);
+      check("a worse one is marked ↓", markOf(core, short), "3/4 ↓");
+      core.send({ type: "close" });
+      nextDay(t);
+      runWithMisses(t, core, 1);
+      check("the same score is marked →", markOf(core, short), "3/4 →");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      runWithMisses(t, core, 0); // melody 3/3, on to accomp
+      check("a piece moved on to a part with no cold run yet shows no mark", markOf(core, duet), null);
+      core.send({ type: "close" });
+      runWithMisses(t, core, 1); // accomp 2/3
+      check("the mark is the current part's", markOf(core, duet), "2/3");
+      const later = setup(storage);
+      check("marks survive a new core on the same storage", markOf(later.core, duet), "2/3");
+    }
+
+    {
+      const { t, core } = seededCore(5);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      playTune(t, core, 1);
+      check("made-up tunes show no mark: their averages are at the top", markOf(core, "made-up-whole"), null);
+    }
+
+    // The list top: tongues found without help, and the made-up tune averages.
+    const listTop = (core) => core.send({ type: "open", what: "pieces" }).overlay;
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      check("no tongue is found without help at first", listTop(core).found, "0 of 15 tongues found without help");
+      core.send({ type: "close" });
+      pickNewSong(core, "title: Two tongues\nmelody: 1 7 1 7 1");
+      cleanRun(t, core); // 1 hit unaided three times, 7 only twice
+      check("a tongue counts once its hint has faded", listTop(core).found, "1 of 15 tongues found without help");
+      core.send({ type: "close" });
+      cleanRun(t, core);
+      check("…every faded tongue counts", listTop(core).found, "2 of 15 tongues found without help");
+      check("found tongues survive a new core on the same storage", listTop(setup(storage).core).found,
+        "2 of 15 tongues found without help");
+      core.send({ type: "close" });
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "3", at: t.now }); // a miss on 1 brings its hint back
+      check("a tongue whose hint came back no longer counts", listTop(core).found, "1 of 15 tongues found without help");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = seededCore(5, storage);
+      check("the list top shows both made-up tunes, before any is played", listTop(core).averages,
+        ["Made-up tune: middle row · no tunes yet", "Made-up tune: whole drum · no tunes yet"]);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      playTune(t, core, 1); // 7/8
+      playTune(t, core, 0); // 8/8
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      playTune(t, core, 2); // 6/8
+      check("…and each one's recent average once played", listTop(core).averages,
+        ["Made-up tune: middle row · recent average 6/8", "Made-up tune: whole drum · recent average 7.5/8"]);
+      check("the averages survive a new core on the same storage", listTop(seededCore(6, storage).core).averages,
+        ["Made-up tune: middle row · recent average 6/8", "Made-up tune: whole drum · recent average 7.5/8"]);
+    }
+
+    // Listen. The core schedules the notes on the clock; the screen makes the sound.
+    const LISTEN_SONG = "title: Listen test\nmelody: 1 2/ 3. 4 - |";
+    // The sound's notes as "tongue@ms from now+ms long".
+    const heardAt = (t, v) => v.sound.events.map((e) => `${e.tongue}@${e.at - t.now}+${e.ms}`).join(" ");
+
+    {
+      const { t, core } = setup();
+      let v = pickNewSong(core, LISTEN_SONG);
+      check("Listen is shown, not playing, before any tap", v.listen, { playing: false, speed: 60 });
+      v = core.send({ type: "listen" });
+      check("Listen plays at tempo 60", v.listen, { playing: true, speed: 60 });
+      check("at 60 a beat is 1 s: the notes follow the song text's lengths",
+        heardAt(t, v), "1@0+1000 2@1000+500 3@1500+1500 4@3000+2000");
+      check("every scheduled sound is a note", v.sound.events.every((e) => e.kind === "note"), true);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, LISTEN_SONG);
+      core.send({ type: "start" });
+      strikeAndWait(t, core, "1"); // on step 2 now
+      let v = core.send({ type: "listen" });
+      check("Listen plays from the top, lighting the first number", v.position, 0);
+      check("no number shows green while Listen plays", v.steps.flatMap((s) => s.tongues).some((tg) => tg.heard), false);
+      t.now += 999;
+      check("still on the first number just before the second sounds", core.send({ type: "tick" }).position, 0);
+      t.now += 1;
+      check("the lit number follows the clock", core.send({ type: "tick" }).position, 1);
+      t.now += 2000;
+      check("…to the last number", core.send({ type: "tick" }).position, 3);
+      t.now += 1999;
+      check("Listen plays on until the last note's length is over", core.send({ type: "tick" }).listen.playing, true);
+      t.now += 1;
+      v = core.send({ type: "tick" });
+      check("then it stops by itself, back on the step you were on, with nothing scheduled",
+        [v.listen.playing, v.position, v.steps[0].tongues[0].heard, v.sound], [false, 1, true, null]);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, LISTEN_SONG);
+      core.send({ type: "start" });
+      strikeAndWait(t, core, "1"); // on step 2, whose tongue is 2
+      core.send({ type: "listen" });
+      t.now += 1600;
+      let v = core.send({ type: "strike", tongue: "2", at: t.now });
+      t.now += 300;
+      v = core.send({ type: "tick" });
+      check("strikes are ignored while Listen plays", [v.position, v.feedback], [2, null]);
+      v = core.send({ type: "listen" });
+      check("tapping Listen again stops it, back on the exact step, with the sound cancelled",
+        [v.listen.playing, v.position, v.sound], [false, 1, null]);
+      v = core.send({ type: "strike", tongue: "3", at: t.now - 500 });
+      check("a strike that sounded during Listen but arrives after it is ignored too", v.feedback, null);
+      v = core.send({ type: "strike", tongue: "2", at: t.now });
+      t.now += 300;
+      check("after Listen the run carries on from that step", core.send({ type: "tick" }).position, 2);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      t.now += 4000;
+      core.send({ type: "listen" });
+      t.now += 4000;
+      let v = core.send({ type: "tick" });
+      check("no hint appears while Listen plays", [v.listen.playing, v.hint, v.feedback], [true, null, null]);
+      v = core.send({ type: "listen" });
+      check("'That was' is back after Listen", v.feedback?.thatWas, "3");
+      t.now += 999;
+      check("the hint wait is held while Listen plays…", core.send({ type: "tick" }).hint, null);
+      t.now += 1;
+      check("…and carries on after it", core.send({ type: "tick" }).hint?.lit, ["1"]);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, LISTEN_SONG);
+      let v = core.send({ type: "listen" });
+      const key = v.sound.key;
+      t.now += 1200; // in the middle of the 2nd note
+      v = core.send({ type: "nudgeListenSpeed", by: 1 });
+      check("+ raises the speed by 5", v.listen.speed, 65);
+      for (let i = 0; i < 3; i++) v = core.send({ type: "nudgeListenSpeed", by: 1 });
+      check("a new speed is a new sound to schedule", [v.listen.speed, v.sound.key !== key], [80, true]);
+      check("the notes still to come are rescheduled at the new speed (a beat is 750 ms at 80), from where Listen is",
+        heardAt(t, v), "3@225+1125 4@1350+1500");
+      check("the lit number stays put when the speed changes", v.position, 1);
+      t.now += 224;
+      check("…until the next note at the new speed", core.send({ type: "tick" }).position, 1);
+      t.now += 1;
+      check("…and moves on at the new speed", core.send({ type: "tick" }).position, 2);
+      for (let i = 0; i < 30; i++) v = core.send({ type: "nudgeListenSpeed", by: 1 });
+      check("the speed goes up to 160 at most", v.listen.speed, 160);
+      for (let i = 0; i < 30; i++) v = core.send({ type: "nudgeListenSpeed", by: -1 });
+      check("…and down to 40 at least", v.listen.speed, 40);
+      core.send({ type: "listen" });
+      v = core.send({ type: "listen" });
+      check("the speed is forgotten after the playback: the next one starts at 60",
+        [v.listen.speed, heardAt(t, v)], [60, "1@0+1000 2@1000+500 3@1500+1500 4@3000+2000"]);
+      t.now += 5000;
+      v = core.send({ type: "tick" });
+      check("…also after a playback that ran to its end", [v.listen.playing, v.listen.speed], [false, 60]);
+      check("the speed control does nothing when Listen isn't playing", core.send({ type: "nudgeListenSpeed", by: 1 }).listen.speed, 60);
+    }
+
+    {
+      const { t, core } = setup();
+      const silent = (v) => [v.listen.playing, v.sound];
+      check("nothing plays on the first render", silent(core.send({ type: "tick" })), [false, null]);
+      check("nothing plays on picking a piece", silent(pickNewSong(core, DUET)), [false, null]);
+      check("nothing plays on Start", silent(core.send({ type: "start" })), [false, null]);
+      const v = cleanRun(t, core);
+      check("nothing plays on a new part", [v.piece.part, ...silent(v)], ["accomp", false, null]);
+      t.now += 60000;
+      check("nothing plays however long you wait", silent(core.send({ type: "tick" })), [false, null]);
+    }
+
+    for (const [what, cmd] of [
+      ["Start", { type: "start" }],
+      ["picking a piece", { type: "pick", pieceId: "bells-two-lines" }],
+      ["opening the piece list", { type: "open", what: "pieces" }],
+      ["opening the gear", { type: "open", what: "gear" }],
+    ]) {
+      const { core } = setup();
+      pickNewSong(core, LISTEN_SONG);
+      core.send({ type: "listen" });
+      const v = core.send(cmd);
+      check(`${what} stops Listen`, [v.listen.playing, v.sound], [false, null]);
+    }
+
+    {
+      const { t, core } = inBoth(); // DUET's both part: 3+1, 5+_5, 6+_6 (held 2 beats)
+      let v = core.send({ type: "listen" });
+      check("both lines sound together, each note with its own length",
+        heardAt(t, v), "3@0+1000 1@0+1000 5@1000+1000 _5@1000+1000 6@2000+2000 _6@2000+2000");
+      t.now += 2000;
+      check("the lit step is the chord sounding", core.send({ type: "tick" }).position, 2);
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      core.send({ type: "strike", tongue: "1", at: t.now });
+      t.now += 100;
+      core.send({ type: "listen" });
+      t.now += 3000;
+      let v = core.send({ type: "listen" });
+      check("Listen during the hit flash: the hit is kept", [v.position, v.steps[0].tongues[0].heard], [0, true]);
+      t.now += 150;
+      check("…and the flash finishes after Listen", core.send({ type: "tick" }).position, 1);
+    }
+
     // Timed mode.
     {
       const storage = fakeStorage();
@@ -1472,6 +1770,31 @@
       check("opening an overlay stops a Timed run", [v.playing, v.timed.countIn, v.sound, v.position], [false, null, null, 0]);
       v = tickAt(run, run.due(10));
       check("…for good", [mark(v), v.done, v.result], ["- - - -", null, null]);
+    }
+
+    {
+      const run = timedRun();
+      strikeAt(run, "1", run.due(0));
+      let v = run.core.send({ type: "listen" });
+      check("Listen stops a Timed run: the beat wouldn't wait", [v.listen.playing, v.playing, v.timed.countIn], [true, false, null]);
+      check("…and its sound is Listen's notes, not the clicks", v.sound.events.every((e) => e.kind === "note"), true);
+      v = tickAt(run, run.due(30));
+      check("…for good", [v.listen.playing, v.playing, mark(v), v.done, v.result], [false, false, "- - - -", null, null]);
+    }
+
+    {
+      const { t, core } = setup();
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      core.send({ type: "setTimed", on: true });
+      const t0 = t.now;
+      let v = core.send({ type: "start" });
+      const tune = v.steps.map(ids).join(" ");
+      const run = { t, core, due: (b) => t0 + (4 + b) * BEAT };
+      v.steps.forEach((s, b) => strikeAt(run, s.tongues[0].id, run.due(b)));
+      v = tickAt(run, run.due(7) + 800);
+      check("a made-up tune's Timed run ends 'on time' like any piece", v.result?.score, "8/8 on time");
+      v = tickAt(run, run.due(7) + 800 + 1500);
+      check("…and makes way for a new tune", [v.playing, v.steps.map(ids).join(" ") !== tune], [false, true]);
     }
 
     {
