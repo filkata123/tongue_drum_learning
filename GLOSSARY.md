@@ -86,3 +86,9 @@ _Avoid_: Melody, track, tune
 **Exercise**:
 A short built-in piece for practising, not a real song. It can't be edited.
 _Avoid_: Melody, drill, lesson
+
+**Made-up tune**:
+An exercise the app makes up fresh: a short tune in an order you can't predict, shaped to sound
+like music (small moves, ending on 1). Practising it means reading every note, because there's
+nothing to remember.
+_Avoid_: Random drill, random melody, shuffle
