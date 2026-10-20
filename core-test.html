@@ -1286,6 +1286,64 @@
       check("corrupt saved scores mean no scores, not a crash", runWithMisses(t, core, 0).result?.score, "First run today: 4/4");
     }
 
+    // Made-up tune scores: every finished tune is saved, per exercise, with an average of the last 10.
+
+    // Plays the showing made-up tune from Start, with one wrong strike on each of its first `missed`
+    // steps, and waits out done (by then the next tune is showing). The wrong tongue is neither the
+    // target nor the step just played, which may still be ringing.
+    function playTune(t, core, missed = 0) {
+      let v = core.send({ type: "start" });
+      while (!v.done) {
+        const target = v.steps[v.position].tongues[0].id;
+        if (v.position < missed) {
+          const before = v.steps[v.position - 1]?.tongues[0].id;
+          const wrong = ["2", "4", "6"].find((tg) => tg !== target && tg !== before);
+          core.send({ type: "strike", tongue: wrong, at: t.now });
+        }
+        core.send({ type: "strike", tongue: target, at: t.now });
+        t.now += 300;
+        v = core.send({ type: "tick" });
+      }
+      t.now += 1500;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = seededCore(5, storage);
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      check("the first made-up tune shows just its score", playTune(t, core, 1).result?.score, "7/8");
+      check("the next one that day is saved too, and shows the average",
+        playTune(t, core, 0).result?.score, "8/8 · your recent average 7.5/8");
+      check("…and the one after", playTune(t, core, 2).result?.score, "6/8 · your recent average 7/8");
+      const later = seededCore(6, storage);
+      check("the scores survive a new core on the same storage", playTune(later.t, later.core, 0).result?.score,
+        "8/8 · your recent average 7.3/8");
+      check("made-up tunes aren't scored as cold runs",
+        JSON.parse(storage.getItem("tongue-drum:scores") ?? "{}")["made-up-whole"], undefined);
+    }
+
+    {
+      const { t, core } = seededCore(9);
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      playTune(t, core, 8); // 0/8
+      let v;
+      for (let i = 0; i < 9; i++) v = playTune(t, core, 0);
+      check("the average covers the last 10 tunes", v.result?.score, "8/8 · your recent average 7.2/8");
+      v = playTune(t, core, 0);
+      check("…and only those: the 11th tune ago drops out", v.result?.score, "8/8 · your recent average 8/8");
+      core.send({ type: "pick", pieceId: "made-up-whole" });
+      check("the other exercise keeps its own scores", playTune(t, core, 4).result?.score, "4/8");
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      check("…and doesn't count towards this one's average", playTune(t, core, 2).result?.score, "6/8 · your recent average 7.8/8");
+    }
+
+    {
+      const { t, core } = seededCore(4, fakeStorage({ "tongue-drum:tunes": "{oops" }));
+      core.send({ type: "pick", pieceId: "made-up-middle" });
+      check("corrupt saved tune scores mean none, not a crash", playTune(t, core, 1).result?.score, "7/8");
+    }
+
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;
     window.testResults = { failed, out: out.textContent };
