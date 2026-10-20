@@ -144,6 +144,7 @@ async function listen(ctx, input) {
   const win = new Float32Array(CONFIG.windowSize);
   const hop = Math.round(ctx.sampleRate / 60);
   let sinceHop = 0, total = 0;
+  let lastReport = ""; // debug: the last strike's three loudest tongues
 
   capture.port.onmessage = ({ data }) => {
     let block = data;
@@ -158,8 +159,17 @@ async function listen(ctx, input) {
         sinceHop = 0;
         const t = (total / ctx.sampleRate) * 1000;
         const strike = listener.process(win, t);
-        // Move the onset from audio time onto the core's clock.
-        if (strike) render(core.send({ type: "strike", tongue: strike.note.id, at: Date.now() - (t - strike.at) }));
+        if (!strike) continue;
+        // Move the onsets from audio time onto the core's clock.
+        const now = Date.now();
+        const clockAt = (at) => now - (t - at);
+        const ranked = strike.ranked.map((r) => ({ ...r, at: clockAt(r.at) }));
+        render(core.send({ type: "strike", tongue: strike.note.id, at: clockAt(strike.at), ranked }));
+        if (DEBUG) {
+          lastReport = `   last strike ${strike.note.id}: ` + strike.ranked.slice(0, 3)
+            .map((r) => `${r.tongue} ${(20 * Math.log10(r.level)).toFixed(0)} dB ${r.at >= strike.at ? "+" : ""}${(r.at - strike.at).toFixed(0)} ms`)
+            .join(" · ");
+        }
       }
     }
   };
@@ -172,7 +182,7 @@ async function listen(ctx, input) {
     const { level, notes, floors, heard } = listener.reading;
     els.levelBar.style.width = `${dbPercent(20 * Math.log10(level), -70, -10)}%`;
     if (DEBUG) {
-      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}`;
+      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}${lastReport}`;
       notes.forEach((p, k) => {
         bars[k].bar.style.height = `${dbPercent(10 * Math.log10(p), -110, -20)}%`;
         bars[k].floor.style.bottom = `${dbPercent(10 * Math.log10(floors[k]), -110, -20)}%`;
