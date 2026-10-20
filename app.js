@@ -17,6 +17,8 @@ const els = {
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
   gears: [$("start-gear"), $("play-gear")], gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
+  listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
+  listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
@@ -61,6 +63,12 @@ function render(v) {
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
   els.result.textContent = els.doneResult.textContent = v.result?.score ?? "";
+
+  els.listenBtn.textContent = v.listen.playing ? "■ Stop" : "▶ Listen";
+  els.listenBtn.classList.toggle("playing", v.listen.playing);
+  els.listenSpeed.hidden = !v.listen.playing;
+  els.listenBpm.textContent = `♩ ${v.listen.speed}`;
+  if (v.sound?.key !== before?.sound?.key) playSound(v.sound);
 
   els.restartBtn.textContent = v.playing ? "Restart" : "Start";
   els.restartBtn.classList.toggle("start", !v.playing);
@@ -163,8 +171,56 @@ els.gears.forEach((btn) => btn.addEventListener("click", () => render(core.send(
 els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
 els.restartBtn.addEventListener("click", () => render(core.send({ type: "start" })));
+els.listenBtn.addEventListener("click", () => render(core.send({ type: "listen" })));
+els.listenSlower.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: -1 })));
+els.listenFaster.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: 1 })));
 
 // --- Audio ---------------------------------------------------------------
+
+let audio = null; // the AudioContext, once Start has opened it
+
+// A drum-like voice: a soft-mallet attack and a ringing tone whose overtones die away first,
+// fading out over about the note's length. Returns its parts so it can be cancelled.
+function drumNote(ctx, out, tongue, when, ms) {
+  const f = NOTE_BY_ID[tongue].freq;
+  const ring = Math.min(2.5, Math.max(0.4, (ms / 1000) * 1.5));
+  return [[1, 0.3, 1], [2, 0.05, 0.35], [3, 0.025, 0.2]].map(([mult, amp, decay]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = f * mult;
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(amp, when + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + ring * decay);
+    osc.connect(gain).connect(out);
+    osc.start(when);
+    osc.stop(when + ring * decay + 0.05);
+    return { osc, gain, when };
+  });
+}
+
+// Listen's sound. The core says what to play and when, on its clock; a new key replaces whatever
+// was scheduled. Notes already ringing carry on unless the sound stops altogether.
+let voices = [];
+function playSound(sound) {
+  if (!audio) return;
+  const now = audio.currentTime;
+  for (const v of voices) {
+    if (v.when > now) v.osc.stop();
+    else if (!sound) {
+      const g = v.gain.gain; // a quick fade, from wherever the ring has got to
+      (g.cancelAndHoldAtTime ?? g.cancelScheduledValues).call(g, now);
+      g.setTargetAtTime(0, now, 0.03);
+      v.osc.stop(now + 0.2);
+    }
+  }
+  voices = [];
+  if (!sound) return;
+  const offset = now - Date.now() / 1000; // clock ms → audio seconds
+  for (const e of sound.events) {
+    if (e.kind !== "note") continue;
+    voices.push(...drumNote(audio, audio.destination, e.tongue, Math.max(now, e.at / 1000 + offset), e.ms));
+  }
+}
 
 async function openInput(ctx) {
   if (SIM) {
@@ -310,6 +366,7 @@ els.startBtn.addEventListener("click", async () => {
     await ctx.resume();
     const input = await openInput(ctx);
     await listen(ctx, input);
+    audio = ctx;
   } catch (err) {
     els.startError.textContent = window.isSecureContext
       ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`

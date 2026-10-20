@@ -12,6 +12,8 @@ const HINT_IDLE_MS = 5000; // …or after this long with no strike, whichever co
 const FADE_HITS = 3;       // after this many unaided hits in a row, a tongue's hint retires
 const CHORD_MS = 100;      // a chord's tongues must each start sounding this close to the strike
 const RING_ON_MS = 1500;   // the step just played may still ring this long after it was hit
+const DEFAULT_TEMPO = 60;  // beats per minute, until each piece keeps its own tempo (#39)
+const LISTEN_SPEEDS = { min: 40, max: 160, step: 5 }; // Listen's −/+, in beats per minute
 
 // Every exercise goes through the same parser as a pasted song.
 const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
@@ -22,11 +24,21 @@ const ALL_EXERCISES = [...EXERCISE_PIECES, ...MADE_UP_TUNES.map((t) => ({ ...t, 
 // A two-line piece is taught in three parts, in this order. A one-line piece has no part (null).
 const partsOf = (piece) => (piece.lines.accomp?.length ? ["melody", "accomp", "both"] : [null]);
 
+// The notes a part sounds, in time order: [{ tongue, start, length }], in beats. Both lines sound
+// every note of either line.
+function notesOf(piece, part) {
+  if (part === "both") return [...piece.lines.melody, ...piece.lines.accomp].sort((a, b) => a.start - b.start);
+  return piece.lines[part === "accomp" ? "accomp" : "melody"];
+}
+
 // Step mode's steps in a part: each step is the tongues struck together, melody first.
 function stepsOf(piece, part) {
   if (part === "both") return piece.both.map((s) => s.tongues);
-  return piece.lines[part === "accomp" ? "accomp" : "melody"].map((n) => [n.tongue]);
+  return notesOf(piece, part).map((n) => [n.tongue]);
 }
+
+// The beat each of the part's steps starts on.
+const stepStarts = (piece, part) => (part === "both" ? piece.both : notesOf(piece, part)).map((s) => s.start);
 
 const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
 const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
@@ -149,6 +161,12 @@ export function createPracticeCore({ storage, clock, random }) {
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
     overlay: null, // null | "pieces" | "gear" | "editor"
     editor: null, // { pieceId, text, errors } while the paste box is open; pieceId null = a new song
+    // Listen, while it plays: { speed, from, at, next, key, held }. Beat `from` of the part sounds
+    // at clock time `at`; the part's notes from index `next` on are the ones still to be scheduled;
+    // `held` is the run's pending timer, set aside until Listen stops.
+    listen: null,
+    soundKey: 0, // goes up whenever the scheduled sound changes
+    listenedUntil: -Infinity, // when Listen last stopped; the mic was ignored until then
   };
   state.part = partOf(state.piece);
   const steps = () => stepsOf(state.piece, state.part);
@@ -188,26 +206,73 @@ export function createPracticeCore({ storage, clock, random }) {
 
   function view() {
     const { piece } = state;
+    // While Listen plays, the lit number is the one sounding, nothing is green, and the run's
+    // "That was" and hint wait until it's back.
+    const listening = Boolean(state.listen);
     return {
       piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part },
       playing: state.playing,
       steps: steps().map((tongues, i) => ({
         tongues: tongues.map((id) => ({
           id,
-          heard: i < state.position || (i === state.position && (state.heard || state.partial === id)),
+          heard: !listening && (i < state.position || (i === state.position && (state.heard || state.partial === id))),
         })),
         missed: false,
       })),
-      position: state.position,
-      feedback: state.feedback,
-      hint: state.hint ? hintView() : null,
+      position: listening ? listenPosition(clock()) : state.position,
+      feedback: listening ? null : state.feedback,
+      hint: state.hint && !listening ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       result: state.result,
+      listen: { playing: Boolean(state.listen), speed: state.listen?.speed ?? listenTempo() },
+      sound: state.listen ? listenSound() : null,
       overlay: state.overlay === "pieces" ? piecesOverlay()
         : state.overlay === "gear" ? { kind: "gear", hints: hintsOn, tempo: null }
         : state.overlay === "editor" ? { kind: "editor", ...state.editor, conversionPrompt: conversionPrompt() }
         : null,
     };
+  }
+
+  // Listen starts at the piece's tempo. Every piece is at the default until #39 keeps one per piece.
+  const listenTempo = () => DEFAULT_TEMPO;
+  const msPerBeat = (speed) => 60000 / speed;
+
+  // Where Listen is in the part: beats ↔ clock time, at its current speed.
+  const listenTime = (beat) => state.listen.at + (beat - state.listen.from) * msPerBeat(state.listen.speed);
+  const listenBeat = (now) => state.listen.from + (now - state.listen.at) / msPerBeat(state.listen.speed);
+  // Listen ends once the part's last note has had its length.
+  const listenEnd = () => listenTime(Math.max(...notesOf(state.piece, state.part).map((n) => n.start + n.length)));
+
+  // The step sounding now: the last one started.
+  function listenPosition(now) {
+    const beat = listenBeat(now);
+    return Math.max(0, stepStarts(state.piece, state.part).findLastIndex((start) => start <= beat));
+  }
+
+  // The part's notes still to come in this playback, on the clock, for the screen to sound, in
+  // whole ms.
+  function listenSound() {
+    const { speed, next, key } = state.listen;
+    const events = notesOf(state.piece, state.part).slice(next).map((n) => ({
+      at: Math.round(listenTime(n.start)), kind: "note", tongue: n.tongue, ms: Math.round(n.length * msPerBeat(speed)),
+    }));
+    return { key, events };
+  }
+
+  // Listen plays the part from the top. The run's pending timer (hint wait, hit flash, done) is
+  // held while it plays, so the run is just as it was when Listen stops.
+  function startListen(now) {
+    const held = state.timer && { left: state.timer.at - now, run: state.timer.run };
+    state.timer = null;
+    state.listen = { speed: listenTempo(), from: 0, at: now, next: 0, key: ++state.soundKey, held };
+  }
+
+  function stopListen(at = clock()) {
+    if (!state.listen) return;
+    const { held } = state.listen;
+    state.listen = null;
+    state.listenedUntil = at;
+    if (held) schedule(held.left, at, held.run);
   }
 
   // Sets the one pending timer, replacing any other.
@@ -217,6 +282,7 @@ export function createPracticeCore({ storage, clock, random }) {
 
   // Runs every timer that's due by `now`, in order; a timer may start the next one.
   function catchUp(now) {
+    if (state.listen && listenEnd() <= now) stopListen(listenEnd());
     while (state.timer && state.timer.at <= now) {
       const { at, run } = state.timer;
       state.timer = null;
@@ -296,7 +362,23 @@ export function createPracticeCore({ storage, clock, random }) {
 
   const commands = {
     tick() {},
+    listen() {
+      if (state.listen) stopListen();
+      else startListen(clock());
+    },
+    nudgeListenSpeed({ by }) {
+      if (!state.listen) return;
+      // The rest of the part is rescheduled from where Listen is now; the notes already due
+      // have sounded.
+      const now = clock();
+      const beat = listenBeat(now);
+      const speed = Math.min(LISTEN_SPEEDS.max, Math.max(LISTEN_SPEEDS.min, state.listen.speed + Math.sign(by) * LISTEN_SPEEDS.step));
+      if (speed === state.listen.speed) return;
+      const next = notesOf(state.piece, state.part).filter((n) => n.start <= beat).length;
+      Object.assign(state.listen, { speed, from: beat, at: now, next, key: ++state.soundKey });
+    },
     start() {
+      stopListen();
       state.playing = true;
       toFirstStep();
     },
@@ -304,6 +386,7 @@ export function createPracticeCore({ storage, clock, random }) {
       if (what !== "pieces" && what !== "gear" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
       // Editing a song reopens its saved text; without a pieceId the paste box is for a new song.
       const song = what === "editor" && pieceId != null ? findSong(pieceId) : null;
+      stopListen(); // an overlay covers the numbers Listen lights
       state.overlay = what;
       if (what === "editor") state.editor = { pieceId: song?.id ?? null, text: song?.text ?? "", errors: [] };
     },
@@ -364,6 +447,7 @@ export function createPracticeCore({ storage, clock, random }) {
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
       if (!piece) throw new Error(`Unknown piece: ${pieceId}`);
+      stopListen();
       state.piece = practise(piece);
       storage.setItem(PIECE_KEY, piece.id);
       state.overlay = null;
@@ -375,6 +459,9 @@ export function createPracticeCore({ storage, clock, random }) {
     },
     strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;
+      // The mic is ignored while Listen plays, so the app's own sound is never a strike, even one
+      // that arrives a little after Listen stopped.
+      if (state.listen || at < state.listenedUntil) return;
       state.result = null; // the last run's line goes once the next one is under way
       const verdict = judge(targets(), { tongue, at, ranked });
       if (verdict === "ignore") return;
