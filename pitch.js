@@ -116,7 +116,8 @@ export class NoteListener {
   }
 
   // Feed one frame (Float32Array, at least cfg.windowSize long) captured at time `t` (ms).
-  // Returns { note, amp } when a strike is recognised, otherwise null.
+  // Returns { note, amp, at } when a strike is recognised, otherwise null; `at` is the strike's
+  // onset, on the same timeline as `t`.
   // The latest per-frame reading is kept on `this.reading` for display.
   process(buf, t) {
     const cfg = this.cfg;
@@ -152,7 +153,7 @@ export class NoteListener {
 
     if (this.collecting) {
       if (t - this.collecting.start < cfg.collectMs) return null;
-      const { before: base } = this.collecting;
+      const { start: at, before: base } = this.collecting;
       this.collecting = null;
       // Forget the quiet before this strike, or its own ring would look like a new jump.
       this.history = [{ t, level, notes }];
@@ -175,7 +176,7 @@ export class NoteListener {
       // A much louder neighbour means this note is only bleeding over from it or ringing along.
       if (NEIGHBOURS[best].some((j) => notes[j] > notes[best] * cfg.neighbourRatio)) return null;
       this.lastNote = best;
-      return { note: DRUM_NOTES[best], amp: Math.sqrt(notes[best]) };
+      return { note: DRUM_NOTES[best], amp: Math.sqrt(notes[best]), at };
     }
 
     if (t - this.lastOnset <= cfg.refractoryMs || recent.length < 2) return null;

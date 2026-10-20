@@ -21,13 +21,13 @@ export const DRUM_NOTES = [
 export const NOTE_BY_ID = Object.fromEntries(DRUM_NOTES.map((n) => [n.id, n]));
 
 export const MELODIES = [
-  { name: "D major scale", notes: ["1", "2", "3", "4", "5", "6", "7", "˙1"] },
-  { name: "Simple phrase", notes: ["3", "5", "6", "5", "3", "1", "2", "3"] },
-  { name: "Up and down", notes: ["1", "3", "5", "7", "5", "3", "1"] },
-  { name: "Classic step", notes: ["1", "1", "2", "3", "3", "2", "1"] },
-  { name: "Full range", notes: ["_3", "_5", "1", "3", "5", "7", "˙2", "˙3"] },
-  { name: "Upper octave", notes: ["˙1", "˙2", "˙3", "˙2", "˙1"] },
-  { name: "Lower octave", notes: ["_3", "_4", "_5", "_6", "_7", "_6", "_5"] },
+  { id: "d-major-scale", name: "D major scale", notes: ["1", "2", "3", "4", "5", "6", "7", "˙1"] },
+  { id: "simple-phrase", name: "Simple phrase", notes: ["3", "5", "6", "5", "3", "1", "2", "3"] },
+  { id: "up-and-down", name: "Up and down", notes: ["1", "3", "5", "7", "5", "3", "1"] },
+  { id: "classic-step", name: "Classic step", notes: ["1", "1", "2", "3", "3", "2", "1"] },
+  { id: "full-range", name: "Full range", notes: ["_3", "_5", "1", "3", "5", "7", "˙2", "˙3"] },
+  { id: "upper-octave", name: "Upper octave", notes: ["˙1", "˙2", "˙3", "˙2", "˙1"] },
+  { id: "lower-octave", name: "Lower octave", notes: ["_3", "_4", "_5", "_6", "_7", "_6", "_5"] },
 ];
 
 // Split a token into its digit and octave ("low" | "mid" | "high").
