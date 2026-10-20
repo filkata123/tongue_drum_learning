@@ -12,7 +12,7 @@ const els = {
   play: $("play"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
   pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
-  done: $("done"), doneText: $("done-text"), restartBtn: $("restart-btn"),
+  done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), addSong: $("add-song"),
   editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
   songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
@@ -62,6 +62,7 @@ function render(v) {
 
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
+  els.result.textContent = els.doneResult.textContent = v.result?.score ?? "";
 
   els.listenBtn.textContent = v.listen.playing ? "■ Stop" : "▶ Listen";
   els.listenBtn.classList.toggle("playing", v.listen.playing);

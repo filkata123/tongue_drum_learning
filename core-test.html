@@ -1016,6 +1016,81 @@
         core.send({ type: "tick" }).hint, { half: "whole", lit: ["7", "1"], wrong: null });
     }
 
+    // Chord steps straight away: a song saved with its part already at both lines.
+    function playChords(text, entries = {}) {
+      return playSong(text, fakeStorage({ "tongue-drum:parts": JSON.stringify({ "song-1": "both" }), ...entries }));
+    }
+
+    {
+      const { t, core } = playChords("title: Left\nmelody: 5 7\naccomp: _5 _7"); // 5+_5, all on the left half
+      t.now += 5000;
+      check("the hint on a chord on the left half shows the left half",
+        core.send({ type: "tick" }).hint, { half: "left", lit: ["5", "_5"], wrong: null });
+    }
+
+    {
+      const { t, core } = inBoth(); // 3+1
+      t.now += 5000;
+      core.send({ type: "tick" }); // the hint shows both tongues
+      const v = core.send(report(t, ["1", 0]));
+      check("half a chord with the hint showing lights only the missing tongue", v.hint, { half: "right", lit: ["3"], wrong: null });
+    }
+
+    {
+      const { t, core } = playChords("title: Wide\nmelody: 7 7\naccomp: 1 1"); // 7 on the left, 1 on the right
+      core.send(report(t, ["7", 0]));
+      let v = core.send(report(t, ["7", 0]));
+      check("a split chord, half heard: the missing tongue's own half, only it lit", v.hint, { half: "right", lit: ["1"], wrong: null });
+      v = core.send(report(t, ["1", 0]));
+      check("…and the other way round", v.hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = inBoth(); // 3+1
+      core.send({ type: "start" }); // a fresh step: inBoth waits long enough for the hint
+      let v = core.send(report(t, ["3", 0]));
+      check("one tongue of a chord is one miss: no hint yet", [heardIn(v.steps[0]), v.hint], [["3"], null]);
+      v = core.send(report(t, ["4", 0]));
+      check("one tongue of a chord, then a wrong tongue, is the 2nd miss: the hint shows",
+        [v.feedback?.thatWas, v.hint], ["4", { half: "right", lit: ["1"], wrong: "4" }]);
+    }
+
+    // The fade on chord steps. Both part: 3+1 three times, then 3 alone, then 1 alone.
+    const CHORD_FADE = "title: Chord fade\nmelody: 3 3 3 3 1\naccomp: 1 1 1 0 0";
+    const chordAndWait = (t, core, ...tongues) => {
+      core.send(report(t, ...tongues.map((tg) => [tg, 0])));
+      t.now += 300;
+      return core.send({ type: "tick" });
+    };
+
+    {
+      const { t, core } = playChords(CHORD_FADE);
+      for (let i = 0; i < 3; i++) chordAndWait(t, core, "3", "1");
+      t.now += 60000;
+      let v = core.send({ type: "tick" });
+      check("3 unaided chord hits fade the first tongue's hint", [ids(v.steps[v.position]), v.hint], [["3"], null]);
+      v = chordAndWait(t, core, "3");
+      t.now += 60000;
+      v = core.send({ type: "tick" });
+      check("…and the second's", [ids(v.steps[v.position]), v.hint], [["1"], null]);
+    }
+
+    {
+      const { t, core } = playChords(CHORD_FADE);
+      t.now += 5000;
+      chordAndWait(t, core, "3", "1"); // after the hint appeared
+      chordAndWait(t, core, "3", "1");
+      chordAndWait(t, core, "3", "1");
+      t.now += 5000;
+      let v = core.send({ type: "tick" });
+      check("a chord hit after the hint appeared doesn't add to the first tongue's fade",
+        [ids(v.steps[v.position]), v.hint], [["3"], { half: "right", lit: ["3"], wrong: null }]);
+      chordAndWait(t, core, "3");
+      t.now += 5000;
+      v = core.send({ type: "tick" });
+      check("…nor to the second's", [ids(v.steps[v.position]), v.hint], [["1"], { half: "right", lit: ["1"], wrong: null }]);
+    }
+
     // The settings gear: one "Location hints" switch, on by default and remembered.
     {
       const storage = fakeStorage();
@@ -1086,6 +1161,129 @@
       core.send(report(t, ["3", 0]));
       const v = core.send(report(t, ["3", 0]));
       check("with hints off, no hint after half a chord twice", v.hint, null);
+    }
+
+    // Cold runs: the first finished run of a piece in one part on a day is scored and saved.
+    const SHORT = "title: Short\nmelody: 1 2 3 5";
+
+    // Plays one run of the current piece from Start with `misses` wrong strikes on its first step,
+    // and waits out done.
+    function runWithMisses(t, core, misses = 0) {
+      core.send({ type: "start" });
+      for (let i = 0; i < misses; i++) core.send({ type: "strike", tongue: "7", at: t.now });
+      playThrough(t, core);
+      t.now += 1500;
+      return core.send({ type: "tick" });
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      pickNewSong(core, SHORT);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now }); // the first step isn't a first-strike hit
+      let v = playThrough(t, core);
+      check("the first finished run of the day shows its score", v.result?.score, "First run today: 3/4");
+      t.now += 1500;
+      v = core.send({ type: "tick" });
+      check("the result line stays after the piece starts again", [v.position, v.result?.score], [0, "First run today: 3/4"]);
+      v = runWithMisses(t, core, 0);
+      check("a later run that day shows just 'again:'", v.result?.score, "again: 4/4");
+      const tomorrow = setup(storage); // a fresh core on the same storage, a day later
+      tomorrow.t.now += 24 * 3600 * 1000;
+      v = runWithMisses(tomorrow.t, tomorrow.core, 0);
+      check("a later run isn't saved: tomorrow's 'last time' is the cold run", v.result?.score, "First run today: 4/4 · last time 3/4");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      runWithMisses(t, core, 1);
+      t.now = new Date(2026, 9, 20, 23, 58).getTime();
+      check("late the same evening is still the same day", runWithMisses(t, core, 0).result?.score, "again: 4/4");
+      t.now = new Date(2026, 9, 21, 0, 1).getTime();
+      check("just past local midnight is a new day", runWithMisses(t, core, 0).result?.score, "First run today: 4/4 · last time 3/4");
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      runWithMisses(t, core, 0);
+      let v = core.send({ type: "start" });
+      check("Restart keeps the result line until a strike", v.result?.score, "First run today: 4/4");
+      v = core.send({ type: "strike", tongue: "7", at: t.now });
+      check("the next run's first strike clears the result line, a miss too", v.result, null);
+      runWithMisses(t, core, 0);
+      v = core.send({ type: "strike", tongue: "1", at: t.now });
+      check("…and so does a hit", v.result, null);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, SHORT);
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now });
+      strikeAndWait(t, core, "1");
+      strikeAndWait(t, core, "2");
+      let v = runWithMisses(t, core, 0); // Restart, mid-run
+      check("a run abandoned by Restart isn't scored", v.result?.score, "First run today: 4/4");
+    }
+
+    {
+      const { t, core } = setup();
+      const short = pickNewSong(core, SHORT).piece.id;
+      core.send({ type: "start" });
+      core.send({ type: "strike", tongue: "7", at: t.now });
+      strikeAndWait(t, core, "1");
+      core.send({ type: "pick", pieceId: "bells-two-lines" });
+      core.send({ type: "pick", pieceId: short });
+      const v = runWithMisses(t, core, 0);
+      check("a run abandoned by picking another piece isn't scored", v.result?.score, "First run today: 4/4");
+      check("picking another piece takes the result line away", core.send({ type: "pick", pieceId: "bells-two-lines" }).result, null);
+    }
+
+    {
+      const { t, core } = setup();
+      pickNewSong(core, DUET);
+      let v = runWithMisses(t, core, 0);
+      check("the melody part's cold run", [v.piece.part, v.result?.score], ["accomp", "First run today: 3/3"]);
+      v = runWithMisses(t, core, 1);
+      check("each part has its own cold run on the same day", [v.piece.part, v.result?.score], ["accomp", "First run today: 2/3"]);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const duet = pickNewSong(core, DUET).piece.id;
+      runWithMisses(t, core, 0); // melody, then on to accomp
+      runWithMisses(t, core, 1); // accomp: 2/3
+      const tomorrow = setup(storage);
+      tomorrow.t.now += 24 * 3600 * 1000;
+      const v = runWithMisses(tomorrow.t, tomorrow.core, 0); // accomp again, now moving on to both
+      check("'last time' comes from the same part", v.result?.score, "First run today: 3/3 · last time 2/3");
+      core.send({ type: "deleteSong", pieceId: duet });
+      check("deleting the current song takes its result line away", core.send({ type: "tick" }).result, null);
+    }
+
+    {
+      const storage = fakeStorage();
+      const { t, core } = setup(storage);
+      const short = pickNewSong(core, SHORT).piece.id;
+      runWithMisses(t, core, 1);
+      core.send({ type: "deleteSong", pieceId: short });
+      check("deleting a song removes its scores from storage", JSON.parse(storage.getItem("tongue-drum:scores"))[short], undefined);
+      pickNewSong(core, SHORT); // a new song can take the deleted one's id
+      const v = runWithMisses(t, core, 0);
+      check("…so a new song with the deleted one's id starts with no score", v.result?.score, "First run today: 4/4");
+      core.send({ type: "open", what: "editor", pieceId: short });
+      core.send({ type: "saveSong", text: "title: Short\nmelody: 1 2 3" });
+      check("editing the current song takes its result line away", core.send({ type: "close" }).result, null);
+    }
+
+    {
+      const { t, core } = setup(fakeStorage({ "tongue-drum:scores": "{oops" }));
+      pickNewSong(core, SHORT);
+      check("corrupt saved scores mean no scores, not a crash", runWithMisses(t, core, 0).result?.score, "First run today: 4/4");
     }
 
     // Listen. The core schedules the notes on the clock; the screen makes the sound.
