@@ -61,8 +61,9 @@ A picture of the 15 tongues laid out as they sit on the drum in front of you.
 _Avoid_: Diagram, keyboard
 
 **Location hint**:
-A drum map with the target tongue lit, shown only when you're stuck on a step. It fades for each
-tongue separately as you find that tongue without it.
+The half of the drum map that holds the target tongue, with that tongue lit, shown beside the
+number only when you're stuck on a step. It fades for each tongue separately as you find that
+tongue without it.
 _Avoid_: Highlight, help, cue
 
 **Song text**:
