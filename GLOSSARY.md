@@ -92,3 +92,13 @@ An exercise the app makes up fresh: a short tune in an order you can't predict, 
 like music (small moves, ending on 1). Practising it means reading every note, because there's
 nothing to remember.
 _Avoid_: Random drill, random melody, shuffle
+
+**First-strike hit**:
+A step played right on the first strike: the right tongue (or both tongues of a chord) with no
+Location hint shown. In Timed mode, hit inside the beat window.
+_Avoid_: Correct note, clean hit
+
+**Cold run**:
+The first full play-through of a piece (in one part) on a given day. Its score, first-strike hits
+out of steps, is how progress is measured. Every made-up tune is a cold run.
+_Avoid_: First try, daily score, attempt
