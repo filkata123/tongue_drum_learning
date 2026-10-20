@@ -20,14 +20,35 @@ export const DRUM_NOTES = [
 
 export const NOTE_BY_ID = Object.fromEntries(DRUM_NOTES.map((n) => [n.id, n]));
 
-export const MELODIES = [
-  { id: "d-major-scale", name: "D major scale", notes: ["1", "2", "3", "4", "5", "6", "7", "˙1"] },
-  { id: "simple-phrase", name: "Simple phrase", notes: ["3", "5", "6", "5", "3", "1", "2", "3"] },
-  { id: "up-and-down", name: "Up and down", notes: ["1", "3", "5", "7", "5", "3", "1"] },
-  { id: "classic-step", name: "Classic step", notes: ["1", "1", "2", "3", "3", "2", "1"] },
-  { id: "full-range", name: "Full range", notes: ["_3", "_5", "1", "3", "5", "7", "˙2", "˙3"] },
-  { id: "upper-octave", name: "Upper octave", notes: ["˙1", "˙2", "˙3", "˙2", "˙1"] },
-  { id: "lower-octave", name: "Lower octave", notes: ["_3", "_4", "_5", "_6", "_7", "_6", "_5"] },
+// The built-in exercises, written in song text (see songtext.js). Read-only; only exercises and
+// public-domain or made-up tunes belong here, since the repo is public.
+export const EXERCISES = [
+  { id: "d-major-scale", text: "title: D major scale\nmelody: 1 2 3 4 5 6 7 ˙1" },
+  { id: "simple-phrase", text: "title: Simple phrase\nmelody: 3 5 6 5 3 1 2 3" },
+  { id: "up-and-down", text: "title: Up and down\nmelody: 1 3 5 7 5 3 1" },
+  { id: "classic-step", text: "title: Classic step\nmelody: 1 1 2 3 3 2 1" },
+  { id: "full-range", text: "title: Full range\nmelody: _3 _5 1 3 5 7 ˙2 ˙3" },
+  { id: "upper-octave", text: "title: Upper octave\nmelody: ˙1 ˙2 ˙3 ˙2 ˙1" },
+  { id: "lower-octave", text: "title: Lower octave\nmelody: _3 _4 _5 _6 _7 _6 _5" },
+  // Two-line exercises: a melody over a low accompaniment.
+  {
+    id: "twinkle-two-lines",
+    text: `title: Twinkle, twinkle (two lines)
+melody: 1 1 5 5 | 6 6 5 - | 4 4 3 3 | 2 2 1 - |
+accomp: _5 - 3 - | 4 - 3 - | _4 - _6 - | _5 - _3 - |`,
+  },
+  {
+    id: "ode-to-joy-two-lines",
+    text: `title: Ode to Joy (two lines)
+melody: 3 3 4 5 | 5 4 3 2 | 1 1 2 3 | 3. 2/ 2 - |
+accomp: 1 - _5 - | 1 - _5 - | _6 - _5 - | 1 - _5 - |`,
+  },
+  {
+    id: "bells-two-lines",
+    text: `title: Bells (two lines)
+melody: 5 - 3 - | 5 3 1 - |
+accomp: 1 0 _5 0 | 1 - _5 - |`,
+  },
 ];
 
 // Split a token into its digit and octave ("low" | "mid" | "high").
