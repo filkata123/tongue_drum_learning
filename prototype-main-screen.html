@@ -4,6 +4,9 @@
   Three structurally different main-screen layouts, switchable via ?variant=A|B|C (or ← / →).
   No microphone: drive it with the yellow sim bar (or keys H hit, M miss, P half chord, F finish,
   L Listen, T Timed, 1/2/3 part, N next piece). Self-contained: double-click to open.
+  Round 2 (after feedback: "B overall, numbers in the middle, dots only, rethink the hint"):
+  D and E are B with the steps centred, next steps on the right, plain dots, and the hint to the
+  left of the numbers. D = whole drum, far half faded. E = only the half with the target, cut and faded.
   On a wide screen it renders inside a phone-sized frame; open it on a phone to see it full size.
 -->
 <html lang="en">
@@ -138,6 +141,38 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .vC .n.high { top: -.06em } .vC .n.low { top: .06em }
 .vC .n.high::before { top: -.14em; } .vC .n.low::after { bottom: -.14em; }
 
+/* ---------- Variants D/E: B revised — steps centred, next on the right, hint on the left ---------- */
+.vD { height: 100%; display: grid; grid-template-rows: auto auto 1fr auto auto; padding: 10px 14px; gap: 6px; }
+.vD header { display: flex; justify-content: space-between; align-items: center; }
+.vD .tools { display: flex; justify-content: space-between; align-items: center; }
+.vD .row { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; min-height: 0; }
+.vD .left { display: flex; justify-content: flex-start; align-items: center; height: 100%; }
+.vD .step { display: flex; flex-direction: column; align-items: center; font-weight: 700; flex: none; }
+/* no line colours: green only ever means "heard" */
+.vD .step .a { color: inherit; }
+.vD .cur { font-size: 6.2rem; background: #1f2937; border-radius: 18px; padding: .1em .22em .2em; }
+.vD .cur .a { font-size: .62em; margin-top: .15em; }
+.vD .nexts { display: flex; gap: 12px; align-items: center; color: #6b7280; }
+.vD .nexts .a { font-size: .7em; margin-top: .25em; }
+.vD .nx1 { font-size: 3rem } .vD .nx2 { font-size: 2.2rem; opacity: .7 } .vD .nx3 { font-size: 1.6rem; opacity: .45 }
+.vD .bottom { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.vD .startbtn { font-size: 1.4rem; padding: .7rem; width: 100%; }
+.vD .n.high::before, .vD .n.low::after { content: ""; position: absolute; left: 50%; width: .17em; height: .17em;
+  border-radius: 50%; background: currentColor; transform: translateX(-50%); }
+.vD .n.high::before { top: -.2em; } .vD .n.low::after { bottom: -.22em; }
+.vD .drum { font-size: .75rem; }
+.vD .drum .t.far { opacity: .12; }
+.vD .hintD .drum { width: 100%; }
+.vD .hintD { width: 100%; }
+/* E: a window onto one half of a drum twice the cell's width */
+.vD .half { position: relative; overflow: hidden; width: 100%; aspect-ratio: 1 / 2; }
+.vD .half .drum { position: absolute; top: 0; width: 200%; font-size: .95rem; }
+.vD .half.right .drum { left: -100%; }
+.vD .half.left { -webkit-mask-image: linear-gradient(to right, #000 70%, transparent);
+  mask-image: linear-gradient(to right, #000 70%, transparent); }
+.vD .half.right { -webkit-mask-image: linear-gradient(to left, #000 70%, transparent);
+  mask-image: linear-gradient(to left, #000 70%, transparent); }
+
 @keyframes shake { 25% { transform: translateX(-.05em) } 75% { transform: translateX(.05em) } }
 .shake { animation: shake .3s; display: inline-flex; flex-direction: inherit; align-items: inherit; }
 </style>
@@ -168,7 +203,7 @@ const PIECES = [
   { name: "Scarborough Fair", group: "My songs", two: true, tempo: 64,
     steps: [["2","_6"],["2",null],["6","_3"],["6",null],["7","_5"],["5",null],["6","_6"],[null,"_4"],["˙1","_7"],["˙2",null],["˙1","_5"],["7",null],["6","_6"]] },
 ];
-const VARIANTS = { A: "Big number", B: "Reading strip", C: "Card + drawer" };
+const VARIANTS = { A: "Big number", B: "Reading strip", C: "Card + drawer", D: "B2 · faded half", E: "B2 · half crop" };
 
 // ---------- state (in memory only) ----------
 const S = { piece: 0, part: "both", step: 0, playing: false, misses: 0, idleSince: Date.now(), hint: false,
@@ -276,6 +311,33 @@ function curCls(which) {
   if (which && S.halfHeard === which) return "hitc";
   return "";
 }
+// Where each tongue sits on the drum, as [x%, y%] with you at the bottom.
+// PLACEHOLDER: not the learner's drum. Replace with the real layout.
+const POS = Object.fromEntries(TONGUES.map((id, i) => {
+  const outer = i < 9, j = outer ? i : i - 9;
+  const k = Math.ceil(j / 2) * (j % 2 ? 1 : -1), a = Math.PI / 2 + k * (outer ? 0.7 : 1.05);
+  const r = outer ? 38 : 19;
+  return [id, [50 + r * Math.cos(a), 50 + r * Math.sin(a)]];
+}));
+function drumAt(targetsLeft, far) { // far(id) → fade that tongue
+  return `<div class="drum">${TONGUES.map((id) => `<div class="t ${targetsLeft.includes(id) ? "target" : id === S.wrong ? "wrong" : ""} ${far(id) ? "far" : ""}"
+    style="left:${POS[id][0]}%;top:${POS[id][1]}%">${n(id)}</div>`).join("")}</div>`;
+}
+function hintSide() { // which half of the drum the target(s) sit in: "left", "right" or "both"
+  const t = targets(steps()[S.step] || {}).filter((x) => x !== S.halfHeard);
+  const sides = new Set(t.map((id) => POS[id][0] <= 50 ? "left" : "right"));
+  return { t, side: sides.size === 1 ? [...sides][0] : "both" };
+}
+function hintD() {
+  const { t, side } = hintSide();
+  const far = (id) => side !== "both" && (side === "left" ? POS[id][0] > 55 : POS[id][0] < 45);
+  return `<div class="hintD">${drumAt(t, far)}</div>`;
+}
+function hintE() {
+  const { t, side } = hintSide();
+  if (side === "both") return hintD(); // a chord across both halves needs the whole drum
+  return `<div class="half ${side}">${drumAt(t, () => false)}</div>`;
+}
 function drum(cls = "") {
   const s = steps()[S.step] || {}, t = targets(s).filter((x) => x !== S.halfHeard);
   // approximate placement: alternate left/right around the rim, low tongues nearest you (bottom)
@@ -356,11 +418,31 @@ function VariantC() {
   </div>`;
 }
 
+// ---------- Variants D/E: B revised ----------
+function VariantB2(hint) {
+  const v = view(), c = v.cur || {};
+  const cur = v.cur ? `<div class="step cur ${S.flash === "miss" ? "shake" : ""}">
+      <span class="m">${n(v.two || c.m ? c.m : c.a, curCls(c.m))}</span>${v.two ? `<span class="a">${n(c.a, curCls(c.a))}</span>` : ""}</div>` : "";
+  const nexts = v.next.map((s, i) => `<div class="step nx${i + 1}"><span class="m">${n(v.two || s.m ? s.m : s.a)}</span>${v.two ? `<span class="a">${n(s.a)}</span>` : ""}</div>`).join("");
+  return `<div class="vD">
+    <header>${pname()}${gear()}</header>
+    <div class="tools">${listenCtl()}${beat()}</div>
+    <div style="display:flex;flex-direction:column;justify-content:center;min-height:0;gap:10px">
+      <div class="row"><div class="left">${S.hint && !S.timed ? hint() : ""}</div>${cur}<div class="nexts">${nexts}</div></div>
+      ${msg()}
+    </div>
+    <div></div>
+    <div class="bottom">${startBtn()}${timedSw()}</div>
+  </div>`;
+}
+const VariantD = () => VariantB2(hintD);
+const VariantE = () => VariantB2(hintE);
+
 // ---------- switcher + wiring ----------
 const params = new URLSearchParams(location.search);
-let variant = VARIANTS[params.get("variant")] ? params.get("variant") : "A";
+let variant = VARIANTS[params.get("variant")] ? params.get("variant") : "D";
 function render() {
-  document.getElementById("app").innerHTML = { A: VariantA, B: VariantB, C: VariantC }[variant]();
+  document.getElementById("app").innerHTML = { A: VariantA, B: VariantB, C: VariantC, D: VariantD, E: VariantE }[variant]();
   document.getElementById("vlabel").textContent = `${variant} (${VARIANTS[variant]})`;
   document.getElementById("state").textContent =
     `piece=${piece().name} part=${S.timed ? "melody(timed)" : part()} step=${S.step + 1}/${steps().length} playing=${S.playing} misses=${S.misses} hint=${S.hint} listen=${S.listening ? S.listenSpeed : "off"} timed=${S.timed}`;
