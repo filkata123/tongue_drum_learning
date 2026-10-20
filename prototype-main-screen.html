@@ -7,6 +7,8 @@
   Round 2 (after feedback: "B overall, numbers in the middle, dots only, rethink the hint"):
   D and E are B with the steps centred, next steps on the right, plain dots, and the hint to the
   left of the numbers. D = whole drum, far half faded. E = only the half with the target, cut and faded.
+  Round 3: tongue positions from the learner's photo; "Miss far" misses on the other half;
+  F = E, but a right-half hint shows on the right (in place of the next steps).
   On a wide screen it renders inside a phone-sized frame; open it on a phone to see it full size.
 -->
 <html lang="en">
@@ -165,13 +167,14 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .vD .hintD .drum { width: 100%; }
 .vD .hintD { width: 100%; }
 /* E: a window onto one half of a drum twice the cell's width */
-.vD .half { position: relative; overflow: hidden; width: 100%; aspect-ratio: 1 / 2; }
-.vD .half .drum { position: absolute; top: 0; width: 200%; font-size: .95rem; }
-.vD .half.right .drum { left: -100%; }
-.vD .half.left { -webkit-mask-image: linear-gradient(to right, #000 70%, transparent);
-  mask-image: linear-gradient(to right, #000 70%, transparent); }
-.vD .half.right { -webkit-mask-image: linear-gradient(to left, #000 70%, transparent);
-  mask-image: linear-gradient(to left, #000 70%, transparent); }
+/* the window spans ~65% of the drum, so tongues near the middle line aren't cut */
+.vD .half { position: relative; overflow: hidden; width: 100%; aspect-ratio: .65; }
+.vD .half .drum { position: absolute; top: 0; width: 153.8%; font-size: .95rem; }
+.vD .half.right .drum { left: -53.8%; }
+.vD .half.left { -webkit-mask-image: linear-gradient(to right, #000 78%, transparent);
+  mask-image: linear-gradient(to right, #000 78%, transparent); }
+.vD .half.right { -webkit-mask-image: linear-gradient(to left, #000 78%, transparent);
+  mask-image: linear-gradient(to left, #000 78%, transparent); }
 
 @keyframes shake { 25% { transform: translateX(-.05em) } 75% { transform: translateX(.05em) } }
 .shake { animation: shake .3s; display: inline-flex; flex-direction: inherit; align-items: inherit; }
@@ -182,7 +185,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 
 <div id="proto">
   <div id="sim">
-    <button data-k="h">Hit</button><button data-k="m">Miss</button><button data-k="p">½ chord</button>
+    <button data-k="h">Hit</button><button data-k="m">Miss</button><button data-k="x">Miss far</button><button data-k="p">½ chord</button>
     <button data-k="f">Finish</button><button data-k="l">Listen</button><button data-k="t">Timed</button>
     <button data-k="1">Melody</button><button data-k="2">Accomp</button><button data-k="3">Both</button>
     <button data-k="n">Next piece</button>
@@ -203,7 +206,7 @@ const PIECES = [
   { name: "Scarborough Fair", group: "My songs", two: true, tempo: 64,
     steps: [["2","_6"],["2",null],["6","_3"],["6",null],["7","_5"],["5",null],["6","_6"],[null,"_4"],["˙1","_7"],["˙2",null],["˙1","_5"],["7",null],["6","_6"]] },
 ];
-const VARIANTS = { A: "Big number", B: "Reading strip", C: "Card + drawer", D: "B2 · faded half", E: "B2 · half crop" };
+const VARIANTS = { A: "Big number", B: "Reading strip", C: "Card + drawer", D: "B2 · faded half", E: "B2 · half crop", F: "B2 · half on its side" };
 
 // ---------- state (in memory only) ----------
 const S = { piece: 0, part: "both", step: 0, playing: false, misses: 0, idleSince: Date.now(), hint: false,
@@ -234,6 +237,14 @@ function miss() {
   const t = targets(steps()[S.step]);
   const wrong = TONGUES.filter((x) => !t.includes(x))[Math.floor(Math.random() * 12)];
   S.misses++; S.wrong = wrong; S.feedback = wrong; S.flash = "miss";
+  if (!S.timed && S.misses >= 2) S.hint = true;
+  S.idleSince = Date.now(); render();
+}
+function missFar() { // a wrong tongue on the other half of the drum from the target
+  if (S.listening || !S.playing) return;
+  const t = targets(steps()[S.step]), left = POS[t[0]][0] <= 50;
+  const pool = TONGUES.filter((x) => !t.includes(x) && (POS[x][0] <= 50) !== left);
+  S.result = null; S.misses++; S.wrong = S.feedback = pool[Math.floor(Math.random() * pool.length)]; S.flash = "miss";
   if (!S.timed && S.misses >= 2) S.hint = true;
   S.idleSince = Date.now(); render();
 }
@@ -311,14 +322,14 @@ function curCls(which) {
   if (which && S.halfHeard === which) return "hitc";
   return "";
 }
-// Where each tongue sits on the drum, as [x%, y%] with you at the bottom.
-// PLACEHOLDER: not the learner's drum. Replace with the real layout.
-const POS = Object.fromEntries(TONGUES.map((id, i) => {
-  const outer = i < 9, j = outer ? i : i - 9;
-  const k = Math.ceil(j / 2) * (j % 2 ? 1 : -1), a = Math.PI / 2 + k * (outer ? 0.7 : 1.05);
-  const r = outer ? 38 : 19;
-  return [id, [50 + r * Math.cos(a), 50 + r * Math.sin(a)]];
-}));
+// Where each tongue sits on the drum, as [x%, y%], read off the learner's photo
+// (prototype-drum-photo.png: tongue centres in its pixels, drum top ~552,352 with radii 422 × 328).
+// Octaves inferred from tongue size (bigger = lower); the photo doesn't show the dots.
+const PHOTO = { "˙3": [553, 50], "˙2": [325, 125], "2": [450, 95], "3": [655, 95], "˙1": [780, 125],
+  "_7": [330, 205], "1": [800, 205], "_3": [556, 240], "7": [230, 310], "6": [880, 310],
+  "_5": [330, 400], "_6": [790, 390], "_4": [560, 490], "5": [400, 535], "4": [720, 530] };
+const POS = Object.fromEntries(Object.entries(PHOTO).map(([id, [x, y]]) =>
+  [id, [50 + (x - 552) / 422 * 45, 50 + (y - 352) / 328 * 45]]));
 function drumAt(targetsLeft, far) { // far(id) → fade that tongue
   return `<div class="drum">${TONGUES.map((id) => `<div class="t ${targetsLeft.includes(id) ? "target" : id === S.wrong ? "wrong" : ""} ${far(id) ? "far" : ""}"
     style="left:${POS[id][0]}%;top:${POS[id][1]}%">${n(id)}</div>`).join("")}</div>`;
@@ -436,13 +447,23 @@ function VariantB2(hint) {
   </div>`;
 }
 const VariantD = () => VariantB2(hintD);
+// F: like E, but a right-half hint sits on the right, in place of the next steps
+function VariantF() {
+  const html = VariantB2(hintE), side = hintSide().side;
+  if (!S.hint || S.timed || side !== "right") return html;
+  const d = document.createElement("div"); d.innerHTML = html;
+  const row = d.querySelector(".row");
+  row.querySelector(".nexts").innerHTML = row.querySelector(".left").innerHTML;
+  row.querySelector(".left").innerHTML = "";
+  return d.innerHTML;
+}
 const VariantE = () => VariantB2(hintE);
 
 // ---------- switcher + wiring ----------
 const params = new URLSearchParams(location.search);
 let variant = VARIANTS[params.get("variant")] ? params.get("variant") : "D";
 function render() {
-  document.getElementById("app").innerHTML = { A: VariantA, B: VariantB, C: VariantC, D: VariantD, E: VariantE }[variant]();
+  document.getElementById("app").innerHTML = { A: VariantA, B: VariantB, C: VariantC, D: VariantD, E: VariantE, F: VariantF }[variant]();
   document.getElementById("vlabel").textContent = `${variant} (${VARIANTS[variant]})`;
   document.getElementById("state").textContent =
     `piece=${piece().name} part=${S.timed ? "melody(timed)" : part()} step=${S.step + 1}/${steps().length} playing=${S.playing} misses=${S.misses} hint=${S.hint} listen=${S.listening ? S.listenSpeed : "off"} timed=${S.timed}`;
@@ -462,7 +483,7 @@ function cycle(d) {
 }
 document.getElementById("prev").onclick = () => cycle(-1);
 document.getElementById("next").onclick = () => cycle(1);
-const ACT = { h: hit, m: miss, p: half, f: finish, l: listen, t: toggleTimed, n: nextPiece,
+const ACT = { h: hit, m: miss, x: missFar, p: half, f: finish, l: listen, t: toggleTimed, n: nextPiece,
   1: () => setPart("melody"), 2: () => setPart("accomp"), 3: () => setPart("both") };
 document.getElementById("sim").onclick = (e) => { const k = e.target.dataset?.k; if (k) ACT[k](); };
 addEventListener("keydown", (e) => {
