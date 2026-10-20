@@ -2,26 +2,41 @@
 // The screen turns DOM events and detector strikes into commands and renders the view that
 // send() returns. See docs/adr/0001-practice-core-single-send-and-view-snapshot.md.
 import { EXERCISES } from "./notes.js";
-import { parseSongText } from "./songtext.js";
+import { checkSongText, conversionPrompt, parseSongText } from "./songtext.js";
 
 const HIT_FLASH_MS = 250; // the right tongue shows green this long before moving on
 const DONE_MS = 1500;      // "done" shows this long before the piece starts again
 
 // Every exercise goes through the same parser as a pasted song.
-const PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
+const EXERCISE_PIECES = EXERCISES.map(({ id, text }) => ({ id, group: "exercise", ...parseSongText(text) }));
 
 // Step mode's tongues, one per step. Until two-line Step mode lands, a two-line piece plays its
 // melody line.
 const stepTongues = (piece) => piece.lines.melody.map((n) => n.tongue);
 
 const PIECE_KEY = "tongue-drum:piece"; // the id of the piece last picked
+const SONGS_KEY = "tongue-drum:songs"; // My songs: [{ id, text }], in the order they were added
 
-const findPiece = (id) => PIECES.find((p) => p.id === id);
+const mySong = ({ id, text }) => ({ id, group: "my-song", text, ...parseSongText(text) });
+
+// My songs as saved. Anything corrupt is left out rather than breaking the app.
+function loadSongs(storage) {
+  let saved;
+  try { saved = JSON.parse(storage.getItem(SONGS_KEY)); } catch { return []; }
+  if (!Array.isArray(saved)) return [];
+  return saved.flatMap((s) => {
+    try { return [mySong(s)]; } catch { return []; }
+  });
+}
 
 export function createPracticeCore({ storage, clock, random }) {
+  const songs = loadSongs(storage);
+  const pieces = () => [...EXERCISE_PIECES, ...songs];
+  const findPiece = (id) => pieces().find((p) => p.id === id);
+
   const state = {
     // The piece last picked, or the first exercise if none was (or it's gone).
-    piece: findPiece(storage.getItem(PIECE_KEY)) ?? PIECES[0],
+    piece: findPiece(storage.getItem(PIECE_KEY)) ?? EXERCISE_PIECES[0],
     playing: false,
     position: 0,
     heard: false, // the current step's tongue was hit; strikes are ignored until the flash ends
@@ -30,10 +45,11 @@ export function createPracticeCore({ storage, clock, random }) {
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
-    overlay: null, // null | "pieces"
+    overlay: null, // null | "pieces" | "editor"
+    editor: null, // { text, errors } while the paste box is open
   };
 
-  // The piece list: Exercises, then My songs (empty until songs can be added).
+  // The piece list: Exercises, then My songs.
   function piecesOverlay() {
     const entry = (p) => ({ id: p.id, title: p.title, current: p === state.piece, editable: p.group === "my-song", mark: null, tempo: null });
     return {
@@ -41,8 +57,8 @@ export function createPracticeCore({ storage, clock, random }) {
       found: "",
       averages: [],
       groups: [
-        { title: "Exercises", pieces: PIECES.filter((p) => p.group === "exercise").map(entry) },
-        { title: "My songs", pieces: PIECES.filter((p) => p.group === "my-song").map(entry) },
+        { title: "Exercises", pieces: EXERCISE_PIECES.map(entry) },
+        { title: "My songs", pieces: songs.map(entry) },
       ],
     };
   }
@@ -59,7 +75,9 @@ export function createPracticeCore({ storage, clock, random }) {
       position: state.position,
       feedback: state.feedback,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
-      overlay: state.overlay === "pieces" ? piecesOverlay() : null,
+      overlay: state.overlay === "pieces" ? piecesOverlay()
+        : state.overlay === "editor" ? { kind: "editor", pieceId: null, ...state.editor, conversionPrompt: conversionPrompt() }
+        : null,
     };
   }
 
@@ -104,11 +122,28 @@ export function createPracticeCore({ storage, clock, random }) {
       toFirstStep();
     },
     open({ what }) {
-      if (what !== "pieces") throw new Error(`Unknown overlay: ${what}`);
+      if (what !== "pieces" && what !== "editor") throw new Error(`Unknown overlay: ${what}`);
       state.overlay = what;
+      if (what === "editor") state.editor = { text: "", errors: [] };
+    },
+    saveSong({ text }) {
+      // A bad paste isn't an error: the paste box shows what's wrong, and nothing is saved.
+      const errors = checkSongText(text);
+      if (errors.length) {
+        state.overlay = "editor";
+        state.editor = { text, errors };
+        return;
+      }
+      const n = Math.max(0, ...songs.map((s) => Number(s.id.slice("song-".length)) || 0)) + 1;
+      songs.push(mySong({ id: `song-${n}`, text }));
+      storage.setItem(SONGS_KEY, JSON.stringify(songs.map((s) => ({ id: s.id, text: s.text }))));
+      state.overlay = "pieces";
+      state.editor = null;
     },
     close() {
-      state.overlay = null;
+      // The paste box was opened from the piece list, so closing it goes back there.
+      state.overlay = state.overlay === "editor" ? "pieces" : null;
+      state.editor = null;
     },
     pick({ pieceId }) {
       const piece = findPiece(pieceId);
