@@ -534,9 +534,13 @@ export function createPracticeCore({ storage, clock, random }) {
     if (targets.length > 1) {
       // Struck now, not still ringing from an earlier strike.
       const fresh = (r) => Math.abs(r.at - at) <= CHORD_MS;
-      const loudest = ranked.slice(0, targets.length);
-      // However close the levels: the chord's tongues are the loudest, all struck together.
-      if (loudest.length === targets.length && loudest.every((r) => targets.includes(r.tongue) && fresh(r))) return "hit";
+      // A tongue only ringing along with a much louder neighbour can be as loud as a soft chord
+      // tongue (a loud 4's 3 and 5 against _4), so it doesn't count, unless it's in the chord.
+      const loudest = ranked.filter((r) => !r.ringAlong || targets.includes(r.tongue)).slice(0, targets.length);
+      // However close the levels: the chord's tongues are the loudest, all struck together and
+      // above the room's background (reports without `heard`, as in tests, count as heard).
+      if (loudest.length === targets.length
+        && loudest.every((r) => targets.includes(r.tongue) && fresh(r) && r.heard !== false)) return "hit";
       if (targets.includes(ranked[0].tongue)) return fresh(ranked[0]) ? "partial" : "ignore";
     }
     // Ring-on: the step just played can still sound for a while, and that's never a miss.

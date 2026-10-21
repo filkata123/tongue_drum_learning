@@ -195,6 +195,17 @@
       // Only the chord's own strike: low neighbours beating can add a stray one later, as on the drum.
       check(`${c.mic}: ${c.name}, the struck tongues are the two loudest`,
         strikes[0]?.ranked.slice(0, 2).map((r) => r.tongue).sort(), Object.keys(c.struck).sort());
+      check(`${c.mic}: ${c.name}, the struck tongues are heard and not ringing along`,
+        strikes[0]?.ranked.filter((r) => r.tongue in c.struck).map((r) => [r.heard, r.ringAlong]), [[true, false], [true, false]]);
+    }
+
+    // Twinkle's 4+_4 on the laptop mic (from the PR #41 testing): the loud 4 makes 3 and 5 ring
+    // along as loud as the soft _4, so _4 often isn't second; the report has to tell them apart.
+    {
+      const [strike] = runStrikes(recorded({ mic: "laptop", struck: { "4": -34, "_4": -62 }, ring: ["3", -62, "4"] }));
+      const by = Object.fromEntries((strike?.ranked || []).map((r) => [r.tongue, r]));
+      check("laptop: octave _4+4, the loud 4's neighbour rings along and _4 doesn't",
+        [by["3"]?.ringAlong, by["_4"]?.ringAlong, by["_4"]?.heard], [true, false, true]);
     }
 
     // Single strikes from the same recordings, with the loudest tongue that rang along. None of them

@@ -20,6 +20,7 @@ export const CONFIG = {
   refractoryMs: 120,    // ignore new strikes this soon after the previous one
   subharmonicRatio: 0.1, // a lower note whose overtone won counts if it rose at least this fraction as much
   reportMs: 200,        // each tongue's level is read this long after a strike, for the ranked report
+  ringAlongRatio: 100,  // in the ranked report, a neighbour this much louder (20 dB) means the tongue only rang along
 };
 
 export function rms(buf) {
@@ -123,7 +124,7 @@ export class NoteListener {
   // Returns { note, amp, at, ranked } when a strike is recognised, otherwise null; `at` is the
   // strike's onset, on the same timeline as `t`. The note is decided collectMs after the onset,
   // but returned reportMs after it, so that it can carry `ranked`: every tongue's level then,
-  // [{ tongue, level, at }], loudest first. That's what a chord is judged on.
+  // [{ tongue, level, at, heard, ringAlong }], loudest first. That's what a chord is judged on.
   // The latest per-frame reading is kept on `this.reading` for display.
   process(buf, t) {
     const cfg = this.cfg;
@@ -137,17 +138,24 @@ export class NoteListener {
     return { ...held, ranked: this.rank() };
   }
 
-  // Every tongue's latest level (an amplitude, like `amp`), loudest first, with when it started
+  // Every tongue's latest level (an amplitude, like `amp`), loudest first, with whether it's above
+  // its background (`heard`), whether a much louder neighbour explains it (`ringAlong`: a loud 4
+  // makes 3 and 5 ring along about 30 dB down, as loud as a softly struck _4), and when it started
   // sounding: the frame from
   // which it has stayed at least half as loud as now, less half a window, since a new sound
   // reaches half its level once it fills half the window. A tongue that has been that loud for
   // the whole trail was already ringing before this strike, and gets the trail's start.
   rank() {
     const now = this.trail[this.trail.length - 1].notes;
+    const { floors } = this.reading;
     return DRUM_NOTES.map((n, k) => {
       let i = this.trail.length - 1;
       while (i > 0 && this.trail[i - 1].notes[k] >= now[k] / 4) i--;
-      return { tongue: n.id, level: Math.sqrt(now[k]), at: this.trail[i].t - this.halfWindowMs };
+      return {
+        tongue: n.id, level: Math.sqrt(now[k]), at: this.trail[i].t - this.halfWindowMs,
+        heard: now[k] >= floors[k],
+        ringAlong: NEIGHBOURS[k].some((j) => now[j] >= now[k] * this.cfg.ringAlongRatio),
+      };
     }).sort((a, b) => b.level - a.level);
   }
 

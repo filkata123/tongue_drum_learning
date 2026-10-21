@@ -569,6 +569,23 @@
     }
 
     {
+      // A loud 3's neighbours ring along as loud as a soft 1, as a loud 4's do against _4.
+      const { t, core } = inBoth();
+      const strike = report(t, ["3", 0], ["2", -20], ["4", -30], ["1", 0]);
+      strike.ranked[1].ringAlong = strike.ranked[2].ringAlong = true;
+      check("tongues ringing along with a louder neighbour don't stand in the way of a chord",
+        heardIn(core.send(strike).steps[0]), ["3", "1"]);
+    }
+
+    {
+      const { t, core } = inBoth();
+      const strike = report(t, ["3", 0], ["1", 0]);
+      strike.ranked[1].heard = false;
+      check("a chord tongue below the room's background isn't heard: half a chord",
+        heardIn(core.send(strike).steps[0]), ["3"]);
+    }
+
+    {
       const { t, core } = inBoth();
       let v = core.send(report(t, ["3", 0], ["1", -400], ["4", -20]));
       check("one target loudest, the other sounding earlier: that number turns green and the step waits",
