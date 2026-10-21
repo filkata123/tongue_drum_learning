@@ -70,13 +70,23 @@ function bothSteps(melody, accomp) {
   return [...byStart].sort(([a], [b]) => a - b).map(([start, tongues]) => ({ start, tongues }));
 }
 
+// The labels a line can start with, in any case, as the field each one fills. Chatbots don't
+// always copy "accomp:" exactly, so the full word counts too.
+const FIELDS = { title: "title", melody: "melody", accomp: "accomp", accompaniment: "accomp" };
+
+// Song text → { fields: { title, melody, accomp }, unknown: [labels] }. A label may come wrapped in
+// Markdown bold or code ("**Melody:**"). Any other one-word label is unknown, so that a line the
+// app can't read is named rather than quietly left out; other lines (blank, ``` and so on) are skipped.
 function readFields(text) {
-  const fields = {};
+  const fields = {}, unknown = [];
   for (const line of text.split("\n")) {
-    const m = line.match(/^\s*(title|melody|accomp)\s*:(.*)$/);
-    if (m) fields[m[1]] = m[2].trim();
+    const m = line.match(/^[\s*`]*([a-z]+)[\s*`]*:(.*)$/i);
+    if (!m) continue;
+    const field = FIELDS[m[1].toLowerCase()];
+    if (field) fields[field] = m[2].replace(/^[\s*`]+|[\s*`]+$/g, "");
+    else unknown.push(m[1]);
   }
-  return fields;
+  return { fields, unknown };
 }
 
 const beats = (n) => `${n} beat${n === 1 ? "" : "s"}`;
@@ -84,7 +94,15 @@ const beats = (n) => `${n} beat${n === 1 ? "" : "s"}`;
 // Song text → every reason it can't be saved, as [{ bar, message }]; [] when it checks out.
 // Whether the song sounds right isn't judged.
 export function checkSongText(text) {
-  const fields = readFields(text);
+  const unknown = readFields(text).unknown
+    .map((label) => ({ bar: null, message: `"${label}:" isn't a song text line; use title:, melody: or accomp:` }));
+  return [...unknown, ...songErrors(text)];
+}
+
+// The reasons song text can't be read as a song at all. An unknown line isn't one: it only stops a
+// new paste, so a song saved before its label was refused still loads.
+function songErrors(text) {
+  const { fields } = readFields(text);
   const errors = [];
   const say = (bar, message) => errors.push({ bar, message: bar === null ? message : `bar ${bar}: ${message}` });
   if (!fields.title) say(null, "The title: line is missing");
@@ -107,11 +125,11 @@ export function checkSongText(text) {
   return errors;
 }
 
-// Song text → { title, lines: { melody, accomp? }, both? }. Throws if it doesn't check out.
+// Song text → { title, lines: { melody, accomp? }, both? }. Throws if it can't be read as a song.
 export function parseSongText(text) {
-  const errors = checkSongText(text);
+  const errors = songErrors(text);
   if (errors.length) throw new Error(`Bad song text: ${errors.map((e) => e.message).join("; ")}`);
-  const fields = readFields(text);
+  const { fields } = readFields(text);
   const line = (name) => readLine(fields[name]).notes.map(({ tongue, start, length }) => ({ tongue, start, length }));
   const piece = { title: fields.title, lines: { melody: line("melody") } };
   if (fields.accomp !== undefined) {
