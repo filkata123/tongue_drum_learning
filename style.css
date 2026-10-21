@@ -46,7 +46,16 @@ header {
   cursor: pointer;
 }
 #piece-title::after { content: " ▾"; color: #6b7280; }
-#piece-part { display: block; font-size: 0.8rem; color: #6b7280; }
+#piece-sub { display: block; font-size: 0.8rem; color: #6b7280; }
+#piece-part {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+#piece-part option { background: #111827; color: #f9fafb; }
 
 /* Reserved for controls whose tickets haven't landed: they hold their space, unseen. */
 .reserved { visibility: hidden; }
@@ -76,6 +85,7 @@ header {
 #stage {
   flex: 1;
   min-height: 0;
+  container-type: size; /* the Location hint is sized to the stage's height */
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -99,9 +109,11 @@ header {
   line-height: 1;
 }
 /* The Location hint: a window onto the target's half of the drum map, cut and faded at the
-   middle. It spans ~65% of the drum, so the tongues near the middle line aren't cut off. */
-#hint { align-self: center; font-size: 1rem; font-weight: 400; }
-#hint .half { position: relative; overflow: hidden; width: 100%; aspect-ratio: 0.65; }
+   middle. It spans ~65% of the drum, so the tongues near the middle line aren't cut off.
+   It's kept within the stage's height, or on a wide screen it covers the header and footer and
+   takes their taps. Only its ✕ takes taps; the rest lets them through. */
+#hint { align-self: center; font-size: 1rem; font-weight: 400; pointer-events: none; }
+#hint .half { position: relative; overflow: hidden; width: min(100%, 70cqh * 0.65); margin-left: auto; aspect-ratio: 0.65; }
 #hint .half.left { mask-image: linear-gradient(to right, #000 78%, transparent); }
 #hint .half.right { mask-image: linear-gradient(to left, #000 78%, transparent); }
 #hint .drum {
@@ -110,8 +122,15 @@ header {
 }
 #hint .half.right .drum { left: -53.8%; }
 /* A chord whose tongues sit on different halves shows the whole drum. */
-#hint .half.whole { aspect-ratio: 1; }
+#hint .half.whole { aspect-ratio: 1; width: min(100%, 70cqh); }
 #hint .half.whole .drum { width: 100%; }
+/* The ✕ sits on the drum's outer edge, away from the faded middle. */
+#hint .hint-close {
+  position: absolute; top: 0; right: 0; pointer-events: auto;
+  font: inherit; font-size: 1.1rem; color: #9ca3af; background: #111827;
+  border: 2px solid #374151; border-radius: 50%; width: 2.25rem; height: 2.25rem; cursor: pointer;
+}
+#hint .hint-close.left { right: auto; left: 0; }
 #hint .tongue {
   position: absolute; width: 13%; height: 13%; transform: translate(-50%, -50%);
   border-radius: 40%; background: #374151; color: #6b7280;

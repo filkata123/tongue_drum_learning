@@ -214,7 +214,8 @@ export function createPracticeCore({ storage, clock, random }) {
     result: null, // { score, missed, tempo }: the finished run's line, until the next run's first strike
     missSeq: 0,
     misses: 0, // misses on the current step, half a chord included
-    hint: false, // the Location hint is showing for the current step
+    hint: false, // the Location hint has shown for the current step, so a hit on it isn't unaided
+    hintClosed: false, // the learner closed the current step's hint; it stays away for this step
     done: false, // the piece was finished; strikes are ignored until the next one starts
     doneSeq: 0,
     timer: null, // { at, run }: the one pending change, run once clock() reaches `at`
@@ -297,7 +298,8 @@ export function createPracticeCore({ storage, clock, random }) {
     // "That was" and hint wait until it's back.
     const listening = Boolean(state.listen);
     return {
-      piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part },
+      // `parts`: the parts the learner can choose between; none for a one-line piece.
+      piece: { id: piece.id, title: piece.title, group: piece.group, part: state.part, parts: partsOf(piece).filter(Boolean) },
       playing: state.playing,
       steps: steps().map((tongues, i) => ({
         tongues: tongues.map((id) => ({ id, heard: !listening && heardStep(i, id) })),
@@ -305,7 +307,7 @@ export function createPracticeCore({ storage, clock, random }) {
       })),
       position: listening ? listenPosition(clock()) : state.position,
       feedback: listening ? null : state.feedback,
-      hint: state.hint && !listening ? hintView() : null,
+      hint: state.hint && !state.hintClosed && !listening ? hintView() : null,
       done: state.done ? { title: piece.title, seq: state.doneSeq } : null,
       result: state.result,
       listen: { playing: Boolean(state.listen), speed: state.listen?.speed ?? listenTempo() },
@@ -380,6 +382,7 @@ export function createPracticeCore({ storage, clock, random }) {
     state.partial = null;
     state.misses = 0;
     state.hint = false;
+    state.hintClosed = false;
     waitForHint(at);
   }
 
@@ -664,6 +667,17 @@ export function createPracticeCore({ storage, clock, random }) {
       state.overlay = null;
       // Picking abandons any run: the learner is the one who presses Start.
       abandonRun();
+    },
+    choosePart({ part }) {
+      if (!partsOf(state.piece).includes(part)) throw new Error(`Not a part of ${state.piece.id}: ${part}`);
+      stopListen();
+      setPart(state.piece, part);
+      // Like picking a piece: the run starts over in the chosen part, waiting for Start.
+      abandonRun();
+    },
+    closeHint() {
+      // Only the current step's hint goes; a hit made after it showed still isn't unaided.
+      state.hintClosed = true;
     },
     strike({ tongue, at, ranked = [{ tongue, level: 1, at }] }) {
       if (!state.playing || state.heard || state.done || state.overlay) return;

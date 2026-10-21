@@ -12,10 +12,13 @@
        Start; the first Start asks for the microphone. -->
   <main id="play" class="screen">
     <header>
-      <button id="piece-name" type="button" aria-haspopup="dialog">
-        <span id="piece-title"></span>
-        <small id="piece-part"></small>
-      </button>
+      <div id="piece-head">
+        <button id="piece-name" type="button" aria-haspopup="dialog">
+          <span id="piece-title"></span>
+        </button>
+        <!-- A two-line piece's part can be chosen here; the app also moves it on after a clean run. -->
+        <small id="piece-sub"><span id="piece-group"></span><select id="piece-part" aria-label="Part" hidden></select></small>
+      </div>
       <button id="play-gear" class="gear" type="button" aria-label="Settings" aria-haspopup="dialog">⚙</button>
     </header>
 

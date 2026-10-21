@@ -9,7 +9,7 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 const $ = (id) => document.getElementById(id);
 const els = {
   startHint: $("start-hint"), startError: $("start-error"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
-  pieceName: $("piece-name"), pieceTitle: $("piece-title"), piecePart: $("piece-part"), feedback: $("feedback"),
+  pieceName: $("piece-name"), pieceTitle: $("piece-title"), pieceGroup: $("piece-group"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
   done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
   pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), piecesProgress: $("pieces-progress"), addSong: $("add-song"),
@@ -56,7 +56,7 @@ function render(v) {
 
   const step = v.steps[v.position];
   els.pieceTitle.textContent = v.piece.title;
-  els.piecePart.textContent = [GROUPS[v.piece.group], PARTS[v.piece.part]].filter(Boolean).join(" · ");
+  renderPart(v.piece, before?.piece);
   els.current.innerHTML = stepHtml(step);
   // Always three next slots, so the step window never grows or shifts near the end.
   els.next.forEach((el, i) => { el.innerHTML = stepHtml(v.steps[v.position + 1 + i]); });
@@ -112,6 +112,18 @@ function render(v) {
   }
 }
 
+// The header's group, and for a two-line piece a drop-down of its parts. The options are rebuilt
+// only when the piece changes, so an open drop-down isn't closed by a re-render.
+function renderPart(piece, before) {
+  const hasParts = piece.parts.length > 0;
+  els.pieceGroup.textContent = GROUPS[piece.group] + (hasParts ? " · " : "");
+  els.piecePart.hidden = !hasParts;
+  if (piece.id !== before?.id || JSON.stringify(piece.parts) !== JSON.stringify(before?.parts)) {
+    els.piecePart.replaceChildren(...piece.parts.map((part) => new Option(PARTS[part], part)));
+  }
+  if (hasParts && els.piecePart.value !== piece.part) els.piecePart.value = piece.part;
+}
+
 // The Location hint: the half of the drum map holding the target (or the whole drum for a chord
 // across both halves), with the target lit and a wrong tongue on that half marked.
 function renderHint(hint) {
@@ -124,7 +136,8 @@ function renderHint(hint) {
     const [x, y] = DRUM_MAP[id];
     return `<span class="tongue${cls}" style="left:${x}%;top:${y}%">${noteHtml(id)}</span>`;
   });
-  els.hint.innerHTML = `<div class="half ${hint.half}"><div class="drum">${tongues.join("")}</div></div>`;
+  els.hint.innerHTML = `<div class="half ${hint.half}"><div class="drum">${tongues.join("")}</div>`
+    + `<button class="hint-close ${hint.half}" type="button" aria-label="Hide hint">✕</button></div>`;
 }
 
 // The draft in the paste box is the screen's: the core only gives the starting text.
@@ -201,6 +214,10 @@ function smallButton(text, label, onClick) {
 }
 
 els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
+els.piecePart.addEventListener("change", () => render(core.send({ type: "choosePart", part: els.piecePart.value })));
+els.hint.addEventListener("click", (e) => {
+  if (e.target.closest(".hint-close")) render(core.send({ type: "closeHint" }));
+});
 els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
 els.addSong.addEventListener("click", () => render(core.send({ type: "open", what: "editor" })));
 els.editorClose.addEventListener("click", () => render(core.send({ type: "close" })));

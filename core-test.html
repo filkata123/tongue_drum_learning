@@ -436,6 +436,27 @@
     }
 
     {
+      // As chatbots write it: capitals, the label's full word and Markdown bold, inside a code fence.
+      const { core } = setup();
+      core.send({ type: "open", what: "editor" });
+      const v = core.send({ type: "saveSong",
+        text: "```\nTitle: Loose labels\n**Melody:** 1 2 | 3 - |\nAccompaniment: _5 - | _6 - |\n```" });
+      const song = songsIn(v).at(-1);
+      check("labels in any case, the word 'accompaniment' and Markdown bold all read as song text",
+        [song?.title, song && core.send({ type: "pick", pieceId: song.id }).piece.parts], ["Loose labels", ["melody", "accomp", "both"]]);
+    }
+
+    {
+      const { v, saved } = badPaste("title: Bass line\nmelody: 1 2 |\nbass: _5 - |");
+      check("a line with a label the app doesn't know is named, not quietly left out", v.overlay.errors.map((e) => e.message),
+        ['"bass:" isn\'t a song text line; use title:, melody: or accomp:']);
+      check("a paste with an unknown line saves nothing", saved, 0);
+      const old = JSON.stringify([{ id: "song-1", text: "title: Saved before\nmelody: 1 2 |\nbass: _5 - |" }]);
+      check("…but a song saved before with such a line still loads",
+        songsIn(setup(fakeStorage({ "tongue-drum:songs": old })).core.send({ type: "open", what: "pieces" })).map((p) => p.title), ["Saved before"]);
+    }
+
+    {
       const { core } = setup();
       core.send({ type: "open", what: "editor" });
       core.send({ type: "saveSong", text: "title: Bad\nmelody: 9" });
@@ -527,6 +548,22 @@
       check("Start restarts within the current part", [v.piece.part, v.position], ["accomp", 0]);
       v = setup(fakeStorage({ "tongue-drum:piece": "bells-two-lines", "tongue-drum:parts": "[oops" })).core.send({ type: "tick" });
       check("corrupt saved parts mean the first part, not a crash", v.piece.part, "melody");
+    }
+
+    {
+      const storage = fakeStorage();
+      const { core } = setup(storage);
+      let v = pickNewSong(core, DUET);
+      check("a two-line piece offers its three parts to choose from", v.piece.parts, ["melody", "accomp", "both"]);
+      core.send({ type: "start" });
+      v = core.send({ type: "choosePart", part: "both" });
+      check("choosing a part goes straight to it: the first step, waiting for Start",
+        [v.piece.part, v.steps.map((s) => ids(s).join("+")).join(" "), v.position, v.playing], ["both", "3+1 5+_5 6+_6", 0, false]);
+      check("the chosen part is the one Start plays", core.send({ type: "start" }).piece.part, "both");
+      check("…and it persists across a fresh core", setup(storage).core.send({ type: "tick" }).piece.part, "both");
+      v = core.send({ type: "choosePart", part: "accomp" });
+      check("an earlier part can be chosen again", v.piece.part, "accomp");
+      check("a one-line piece has no parts to choose from", core.send({ type: "pick", pieceId: "simple-phrase" }).piece.parts, []);
     }
 
     {
@@ -895,6 +932,31 @@
       for (const tongue of ["7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
       t.now += 5000;
       check("a hit after the hint appeared doesn't count towards the fade",
+        core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      check("the hint shows before it's closed", core.send({ type: "tick" }).hint === null, false);
+      check("closing the hint takes it away", core.send({ type: "closeHint" }).hint, null);
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      core.send({ type: "strike", tongue: "3", at: t.now });
+      t.now += 5000;
+      check("…for the rest of that step, misses and waits included", core.send({ type: "tick" }).hint, null);
+      strikeAndWait(t, core, "1");
+      t.now += 5000;
+      check("the next step's hint can show again", core.send({ type: "tick" }).hint, { half: "left", lit: ["7"], wrong: null });
+    }
+
+    {
+      const { t, core } = playSong(HINT_SONG);
+      t.now += 5000;
+      core.send({ type: "closeHint" });
+      strikeAndWait(t, core, "1"); // after the hint appeared, though it was closed
+      for (const tongue of ["7", "1", "7", "1", "7"]) strikeAndWait(t, core, tongue);
+      t.now += 5000;
+      check("a hit after closing the hint still doesn't count towards the fade",
         core.send({ type: "tick" }).hint, { half: "right", lit: ["1"], wrong: null });
     }
 
