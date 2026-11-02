@@ -18,8 +18,9 @@
     const out = document.getElementById("out");
     const results = [];
 
-    // Render strikes [{ id, at (s), amp, detune (cents), fund, beat, sym }] into one signal, drum-ish:
-    // fundamental + weaker harmonics + an inharmonic partial, exponential decay, a little noise.
+    // Render strikes [{ id, at (s), amp, detune (cents), fund, overtones, beat, sym }] into one signal,
+    // drum-ish: fundamental + weaker harmonics (scaled by `overtones`, default 1) + an inharmonic
+    // partial, exponential decay, a little noise.
     // Real-drum quirks: `beat` = { depth, hz } makes the volume wobble; `sym` = { id, gain } makes a
     // neighbouring tongue slowly ring along.
     // Every signal starts with LEAD seconds of just noise, like the moment after pressing Start.
@@ -36,9 +37,9 @@
           const t = (i - start) / SR;
           let env = (st.amp ?? 0.3) * Math.min(1, t / 0.003) * Math.exp(-t * 2.5);
           if (st.beat) env *= 1 - st.beat.depth * 0.5 * (1 - Math.cos(2 * Math.PI * st.beat.hz * t));
-          sig[i] += env * ((st.fund ?? 1) * Math.sin(2 * Math.PI * f * t)
-            + 0.25 * Math.sin(2 * Math.PI * 2 * f * t) * Math.exp(-t * 4)
-            + 0.1 * Math.sin(2 * Math.PI * 2.76 * f * t) * Math.exp(-t * 8));
+          sig[i] += env * ((st.fund ?? 1) * Math.sin(2 * Math.PI * f * t) + (st.overtones ?? 1)
+            * (0.25 * Math.sin(2 * Math.PI * 2 * f * t) * Math.exp(-t * 4)
+            + 0.1 * Math.sin(2 * Math.PI * 2.76 * f * t) * Math.exp(-t * 8)));
           if (st.sym) {
             const fs = NOTE_BY_ID[st.sym.id].freq;
             sig[i] += env * st.sym.gain * (1 - Math.exp(-t / 0.3)) * Math.sin(2 * Math.PI * fs * t);
@@ -132,6 +133,123 @@
     check("lower octave melody on a real-ish drum",
       runListener(render(["_3", "_4", "_5", "_6", "_7"].map((id, i, a) => ({ ...lowReal(id, a[i + 1] || a[i - 1]), at: 0.3 + i * 1.2 })), 6.5)),
       ["_3", "_4", "_5", "_6", "_7"]);
+
+    // --- Ranked report: every strike also carries each tongue's level ~0.2 s after the onset ---
+
+    // All strikes in a signal, with their ranked reports.
+    function runStrikes(sig) {
+      const l = new NoteListener(SR);
+      const strikes = [];
+      for (let end = WIN; end <= sig.length; end += HOP) {
+        const e = l.process(sig.subarray(end - WIN, end), (end / SR) * 1000);
+        if (e) strikes.push(e);
+      }
+      return strikes;
+    }
+
+    {
+      const [strike] = runStrikes(render([{ id: "5", at: 0.3 }], 1.5));
+      check("a strike's ranked report lists all 15 tongues once, loudest first",
+        [strike.ranked.map((r) => r.tongue).sort().join(" "), strike.ranked.every((r, i) => i === 0 || r.level <= strike.ranked[i - 1].level)],
+        [DRUM_NOTES.map((n) => n.id).sort().join(" "), true]);
+      check("the struck tongue tops the ranked report", strike.ranked[0].tongue, "5");
+    }
+
+    // Chords from the real-drum recordings in #9 (laptop mic) and #12 (phone): each tongue's level
+    // in dB ~0.2 s after the onset, as recorded. `ring` = [tongue, dB, ringing along with]: the
+    // loudest tongue that wasn't struck. The laptop mic outputs exact digital silence when the room
+    // is quiet, so its cases have no background noise. Real tongues' harmonics are far weaker than
+    // render()'s defaults (a single strike's octave was always 34+ dB down), hence `overtones`.
+    const dB = (x) => Math.pow(10, x / 20);
+    const AMP_AT_REPORT = 0.75, SWELL_AT_REPORT = 0.31; // what render() makes of `amp` and `sym` by then
+    function recorded({ mic, struck, ring: [ringId, ringDb, by] }) {
+      return render(Object.entries(struck).map(([id, db]) => ({
+        id, at: 0.3, amp: dB(db) / AMP_AT_REPORT, overtones: 0.02,
+        ...(id === by ? { sym: { id: ringId, gain: dB(ringDb - db) / SWELL_AT_REPORT } } : {}),
+      })), 1.2, { noise: mic === "laptop" ? 0 : 0.002 });
+    }
+    const CHORDS = [
+      { mic: "laptop", name: "octave _3+3", struck: { "3": -35, "_3": -63 }, ring: ["4", -65, "3"] },
+      { mic: "laptop", name: "octave _6+6, 6 softer", struck: { "6": -45, "_6": -61 }, ring: ["1", -68, "6"] },
+      { mic: "laptop", name: "octave 1+˙1", struck: { "1": -41, "˙1": -50 }, ring: ["2", -67, "1"] },
+      { mic: "laptop", name: "octave 3+˙3, ˙3 softer", struck: { "3": -37, "˙3": -65 }, ring: ["1", -69, "3"] },
+      { mic: "laptop", name: "overtone _3+7", struck: { "7": -53, "_3": -69 }, ring: ["3", -71, "_3"] },
+      { mic: "laptop", name: "overtone _4+˙1, ˙1 softer", struck: { "˙1": -47, "_4": -60 }, ring: ["3", -65, "˙1"] },
+      { mic: "laptop", name: "wide 1+5, 5 softer", struck: { "1": -38, "5": -62 }, ring: ["_7", -67, "1"] },
+      { mic: "laptop", name: "wide _5+3", struck: { "3": -35, "_5": -57 }, ring: ["1", -63, "3"] },
+      { mic: "laptop", name: "neighbour 1+2", struck: { "2": -43, "1": -59 }, ring: ["_7", -71, "1"] },
+      { mic: "laptop", name: "neighbour 5+6, 6 softer", struck: { "5": -40, "6": -59 }, ring: ["1", -72, "5"] },
+      { mic: "laptop", name: "neighbour _3+_4", struck: { "_3": -60, "_4": -62 }, ring: ["5", -69, "_4"] },
+      { mic: "phone", name: "octave _3+3, 3 softer", struck: { "3": -22, "_3": -40 }, ring: ["_4", -43, "_3"] },
+      { mic: "phone", name: "octave _6+6, 6 softer", struck: { "_6": -31, "6": -38 }, ring: ["3", -58, "6"] },
+      { mic: "phone", name: "octave 1+˙1, ˙1 softer", struck: { "1": -39, "˙1": -42 }, ring: ["_7", -55, "1"] },
+      { mic: "phone", name: "overtone _3+7", struck: { "7": -33, "_3": -41 }, ring: ["_4", -44, "_3"] },
+      { mic: "phone", name: "overtone _4+˙1", struck: { "_4": -31, "˙1": -34 }, ring: ["_3", -41, "_4"] },
+      { mic: "phone", name: "wide 2+6, 6 softer", struck: { "2": -23, "6": -48 }, ring: ["3", -51, "2"] },
+      { mic: "phone", name: "neighbour 1+2, 2 softer", struck: { "2": -29, "1": -40 }, ring: ["_7", -46, "1"] },
+      { mic: "phone", name: "neighbour _3+_4, _4 softer", struck: { "_4": -28, "_3": -36 }, ring: ["_5", -48, "_3"] },
+    ];
+    for (const c of CHORDS) {
+      const strikes = runStrikes(recorded(c));
+      if (strikes[0]) { const lv = Object.fromEntries(strikes[0].ranked.map((r) => [r.tongue, (20 * Math.log10(r.level)).toFixed(0)])); out.innerHTML += `CAL ${c.mic} ${c.name}: ${Object.entries(c.struck).map(([id, d]) => `${id} ${d}→${lv[id]}`).join(", ")}, ring ${c.ring[0]} ${c.ring[1]}→${lv[c.ring[0]]}  top3 ${strikes[0].ranked.slice(0, 3).map((r) => r.tongue).join(" ")}\n`; }
+      // Only the chord's own strike: low neighbours beating can add a stray one later, as on the drum.
+      check(`${c.mic}: ${c.name}, the struck tongues are the two loudest`,
+        strikes[0]?.ranked.slice(0, 2).map((r) => r.tongue).sort(), Object.keys(c.struck).sort());
+      check(`${c.mic}: ${c.name}, the struck tongues are heard and not ringing along`,
+        strikes[0]?.ranked.filter((r) => r.tongue in c.struck).map((r) => [r.heard, r.ringAlong]), [[true, false], [true, false]]);
+    }
+
+    // Twinkle's 4+_4 on the laptop mic (from the PR #41 testing): the loud 4 makes 3 and 5 ring
+    // along as loud as the soft _4, so _4 often isn't second; the report has to tell them apart.
+    {
+      const [strike] = runStrikes(recorded({ mic: "laptop", struck: { "4": -34, "_4": -62 }, ring: ["3", -62, "4"] }));
+      const by = Object.fromEntries((strike?.ranked || []).map((r) => [r.tongue, r]));
+      check("laptop: octave _4+4, the loud 4's neighbour rings along and _4 doesn't",
+        [by["3"]?.ringAlong, by["_4"]?.ringAlong, by["_4"]?.heard], [true, false, true]);
+    }
+
+    // Single strikes from the same recordings, with the loudest tongue that rang along. None of them
+    // put an unstruck tongue within 6 dB of the struck one, so the report mustn't either.
+    const SINGLES = [
+      { mic: "laptop", name: "_3", struck: { "_3": -63 }, ring: ["_4", -71, "_3"] },
+      { mic: "laptop", name: "_6", struck: { "_6": -54 }, ring: ["1", -71, "_6"] },
+      { mic: "laptop", name: "˙1", struck: { "˙1": -49 }, ring: ["5", -61, "˙1"] },
+      { mic: "phone", name: "_3", struck: { "_3": -37 }, ring: ["_4", -45, "_3"] },
+      { mic: "phone", name: "1", struck: { "1": -22 }, ring: ["_7", -44, "1"] },
+      { mic: "phone", name: "˙1", struck: { "˙1": -35 }, ring: ["3", -48, "˙1"] },
+    ];
+    for (const c of SINGLES) {
+      const [strike] = runStrikes(recorded(c));
+      const [first, second] = strike?.ranked || [];
+      check(`${c.mic}: single ${c.name} with ${c.ring[0]} ringing along, the struck tongue is loudest by 6+ dB`,
+        [first?.tongue, first?.level >= second?.level * dB(6)], [c.name, true]);
+    }
+
+    // Onset times in the report, on the same timeline as the strike's `at`, checked against when
+    // the tongue was really struck. (The strike's own `at` can come a few frames late over a ringing
+    // tongue; the core gets both.)
+    const FRAME_MS = (HOP / SR) * 1000;
+    const onsetOf = (strike, id) => strike.ranked.find((r) => r.tongue === id).at;
+    const struckAt = (s) => (s + LEAD) * 1000;
+    {
+      const [strike] = runStrikes(render([{ id: "1", at: 0.3, amp: 0.2 }, { id: "˙1", at: 0.3, amp: 0.08 }], 1.2));
+      check("a chord's two tongues both report when they were struck, within two frames",
+        ["1", "˙1"].map((id) => Math.abs(onsetOf(strike, id) - struckAt(0.3)) <= 2 * FRAME_MS), [true, true]);
+    }
+    {
+      const [strike] = runStrikes(render([{ id: "1", at: 0.3, amp: 0.2 }, { id: "5", at: 0.45, amp: 0.2 }], 1.2));
+      check("tongues struck 0.15 s apart report onsets 0.15 s apart, within two frames",
+        Math.abs(onsetOf(strike, "5") - onsetOf(strike, "1") - 150) <= 2 * FRAME_MS, true);
+    }
+    {
+      // #12: on the phone, a single 5 struck just after two 1s had the ringing 1 only 2 dB below it.
+      const strike = runStrikes(render([{ id: "1", at: 0.3, amp: 0.3 }, { id: "5", at: 0.9, amp: 0.15 }], 1.8))
+        .find((s) => s.note.id === "5");
+      check("a tongue still ringing from an earlier strike reports an onset well before this one (ring-on)",
+        struckAt(0.9) - onsetOf(strike, "1") >= 100, true);
+      check("...while the struck tongue reports this strike's onset, within two frames",
+        Math.abs(onsetOf(strike, "5") - struckAt(0.9)) <= 2 * FRAME_MS, true);
+    }
 
     const failed = results.filter((r) => !r.ok).length;
     out.innerHTML += `\n${failed ? `<span class="fail">${failed} failed</span>` : '<span class="pass">all passed</span>'}\n`;

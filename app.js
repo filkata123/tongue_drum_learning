@@ -1,5 +1,5 @@
 import { createPracticeCore } from "./core.js";
-import { DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
+import { DRUM_MAP, DRUM_NOTES, NOTE_BY_ID, parseToken } from "./notes.js";
 import { CONFIG, NoteListener } from "./pitch.js";
 
 const params = new URLSearchParams(location.search);
@@ -8,19 +8,44 @@ const DEBUG = params.has("debug"); // show what the detector hears, live
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  start: $("start"), startBtn: $("start-btn"), startError: $("start-error"),
-  play: $("play"), stage: $("stage"), current: $("current"), next: $("next"),
-  melodyName: $("melody-name"), progress: $("progress"), feedback: $("feedback"),
+  startHint: $("start-hint"), startError: $("start-error"), stage: $("stage"), hint: $("hint"), current: $("current"), next: [...$("next").children],
+  pieceName: $("piece-name"), pieceTitle: $("piece-title"), pieceGroup: $("piece-group"), piecePart: $("piece-part"), feedback: $("feedback"),
   debug: $("debug"), noteBars: $("note-bars"), simHint: $("sim-hint"), levelBar: $("level-bar"),
-  done: $("done"), doneText: $("done-text"),
+  done: $("done"), doneText: $("done-text"), doneResult: $("done-result"), result: $("result"), restartBtn: $("restart-btn"),
+  pieces: $("pieces"), piecesClose: $("pieces-close"), piecesGroups: $("pieces-groups"), piecesProgress: $("pieces-progress"), addSong: $("add-song"),
+  editor: $("editor"), editorTitle: $("editor-title"), editorClose: $("editor-close"), copyPrompt: $("copy-prompt"),
+  songText: $("song-text"), songErrors: $("song-errors"), saveSong: $("save-song"),
+  gearBtn: $("play-gear"), gear: $("gear"), gearClose: $("gear-close"), hintsSwitch: $("hints-switch"),
+  listenBtn: $("listen-btn"), listenSpeed: $("listen-speed"), listenBpm: $("listen-bpm"),
+  listenSlower: $("listen-slower"), listenFaster: $("listen-faster"),
+  timedSwitch: $("timed-switch"),
+  tempoBpm: $("tempo-bpm"), tempoSlower: $("tempo-slower"), tempoFaster: $("tempo-faster"), tempoAuto: $("tempo-auto"),
 };
 
 const core = createPracticeCore({ storage: localStorage, clock: Date.now, random: Math.random });
 
-function noteHtml(id) {
+function noteHtml(id, cls = "") {
   const { digit, octave } = parseToken(id);
-  return `<span class="note ${octave}">${digit}</span>`;
+  return `<span class="note ${octave}${cls}">${digit}</span>`;
 }
+
+// A step's tongues stacked top to bottom (melody over accompaniment); heard ones turn green, and
+// a note missed in a Timed run red.
+const stepHtml = (step) => (step
+  ? step.tongues.map((t) => noteHtml(t.id, t.heard ? " heard" : step.missed ? " missed" : "")).join("")
+  : "");
+
+// The finished run's line: the score, then any tongues missed in a Timed run, and whether the
+// tempo rose.
+function resultHtml(result) {
+  if (!result) return "";
+  const missed = result.missed.length ? ` · missed ${result.missed.map((id) => noteHtml(id)).join(" ")}` : "";
+  const tempo = result.tempo ? ` · ${result.tempo}` : "";
+  return `${result.score}${missed}${tempo}`;
+}
+
+const GROUPS = { exercise: "Exercise", "my-song": "My song" };
+const PARTS = { melody: "melody line", accomp: "accompaniment line", both: "both lines" };
 
 // Draws a view snapshot from the core. The same snapshot comes back while nothing changes.
 let shown = null;
@@ -30,15 +55,14 @@ function render(v) {
   shown = v;
 
   const step = v.steps[v.position];
-  els.melodyName.textContent = v.piece.title;
-  els.current.innerHTML = noteHtml(step.tongues[0].id);
-  const next = v.steps[v.position + 1];
-  els.next.innerHTML = next ? noteHtml(next.tongues[0].id) : "✓";
-  els.progress.innerHTML = v.steps
-    .map((_, i) => `<span class="dot ${i < v.position ? "done" : i === v.position ? "now" : ""}"></span>`)
-    .join("");
+  els.pieceTitle.textContent = v.piece.title;
+  renderPart(v.piece, before?.piece);
+  els.current.innerHTML = stepHtml(step);
+  // Always three next slots, so the step window never grows or shifts near the end.
+  els.next.forEach((el, i) => { el.innerHTML = stepHtml(v.steps[v.position + 1 + i]); });
 
-  els.stage.classList.toggle("hit", !v.done && step.tongues.every((t) => t.heard));
+  if (JSON.stringify(v.hint) !== JSON.stringify(before?.hint)) renderHint(v.hint);
+
   if (!v.feedback) {
     els.stage.classList.remove("miss");
     els.feedback.textContent = "";
@@ -49,11 +73,249 @@ function render(v) {
     els.feedback.innerHTML = `That was ${noteHtml(v.feedback.thatWas)}`;
   }
 
+  // Timed mode: the count-in's numbers, then a pulse on the current step for every beat.
+  els.feedback.classList.toggle("count-in", v.timed.countIn !== null);
+  if (v.timed.countIn !== null) els.feedback.textContent = String(v.timed.countIn);
+  if (before && v.timed.beatSeq !== before.timed.beatSeq) {
+    els.current.classList.remove("beat");
+    void els.current.offsetWidth; // restart the pulse animation
+    els.current.classList.add("beat");
+  }
+
   els.done.hidden = !v.done;
   if (v.done) els.doneText.textContent = v.done.title;
+  els.result.innerHTML = els.doneResult.innerHTML = resultHtml(v.result);
+
+  els.listenBtn.textContent = v.listen.playing ? "■ Stop" : "▶ Listen";
+  els.listenBtn.classList.toggle("playing", v.listen.playing);
+  els.listenSpeed.hidden = !v.listen.playing;
+  els.listenBpm.textContent = `♩ ${v.listen.speed}`;
+  if (v.sound?.key !== before?.sound?.key) playSound(v.sound);
+
+  els.restartBtn.textContent = v.playing ? "Restart" : "Start";
+  els.restartBtn.classList.toggle("start", !v.playing);
+  els.timedSwitch.checked = v.timed.on;
+  if (v.playing !== before?.playing) keepAwake(v.playing);
+
+  els.pieces.hidden = v.overlay?.kind !== "pieces";
+  // Rebuilt only when the list itself changed, so a tap isn't lost to a re-render.
+  if (!els.pieces.hidden && JSON.stringify(v.overlay) !== JSON.stringify(before?.overlay)) renderPieces(v.overlay);
+
+  els.editor.hidden = v.overlay?.kind !== "editor";
+  if (!els.editor.hidden) renderEditor(v.overlay, before?.overlay?.kind === "editor");
+
+  els.gear.hidden = v.overlay?.kind !== "gear";
+  if (!els.gear.hidden) {
+    els.hintsSwitch.checked = v.overlay.hints;
+    els.tempoBpm.textContent = v.overlay.tempo.locked ? `${v.overlay.tempo.bpm} 🔒` : v.overlay.tempo.bpm;
+    els.tempoAuto.setAttribute("aria-pressed", String(!v.overlay.tempo.locked));
+  }
 }
 
+// The header's group, and for a two-line piece a drop-down of its parts. The options are rebuilt
+// only when the piece changes, so an open drop-down isn't closed by a re-render.
+function renderPart(piece, before) {
+  const hasParts = piece.parts.length > 0;
+  els.pieceGroup.textContent = GROUPS[piece.group] + (hasParts ? " · " : "");
+  els.piecePart.hidden = !hasParts;
+  if (piece.id !== before?.id || JSON.stringify(piece.parts) !== JSON.stringify(before?.parts)) {
+    els.piecePart.replaceChildren(...piece.parts.map((part) => new Option(PARTS[part], part)));
+  }
+  if (hasParts && els.piecePart.value !== piece.part) els.piecePart.value = piece.part;
+}
+
+// The Location hint: the half of the drum map holding the target (or the whole drum for a chord
+// across both halves), with the target lit and a wrong tongue on that half marked.
+function renderHint(hint) {
+  if (!hint) {
+    els.hint.replaceChildren();
+    return;
+  }
+  const tongues = DRUM_NOTES.map(({ id }) => {
+    const cls = hint.lit.includes(id) ? " lit" : id === hint.wrong ? " wrong" : "";
+    const [x, y] = DRUM_MAP[id];
+    return `<span class="tongue${cls}" style="left:${x}%;top:${y}%">${noteHtml(id)}</span>`;
+  });
+  els.hint.innerHTML = `<div class="half ${hint.half}"><div class="drum">${tongues.join("")}</div>`
+    + `<button class="hint-close ${hint.half}" type="button" aria-label="Hide hint">✕</button></div>`;
+}
+
+// The draft in the paste box is the screen's: the core only gives the starting text.
+function renderEditor({ pieceId, text, errors }, wasOpen) {
+  els.editorTitle.textContent = pieceId ? "Edit song" : "Add song";
+  if (!wasOpen) {
+    els.songText.value = text;
+    els.copyPrompt.textContent = "Copy conversion prompt";
+  }
+  els.songErrors.replaceChildren(...errors.map((e) => {
+    const li = document.createElement("li");
+    li.textContent = e.message;
+    return li;
+  }));
+}
+
+function renderPieces({ found, averages, groups }) {
+  // Progress shows only here: tongues found without help and the made-up tune averages on top,
+  // each piece's latest cold run beside its title.
+  els.piecesProgress.replaceChildren(...[found, ...averages].map((line) => {
+    const p = document.createElement("p");
+    p.textContent = line;
+    return p;
+  }));
+  els.piecesGroups.replaceChildren(...groups.flatMap((g) => {
+    const title = document.createElement("h2");
+    title.textContent = g.title;
+    if (!g.pieces.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "Nothing here yet.";
+      return [title, empty];
+    }
+    return [title, ...g.pieces.map((p) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `piece${p.current ? " current" : ""}`;
+      btn.textContent = p.title;
+      if (p.mark) {
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        mark.textContent = p.mark;
+        btn.append(mark);
+      }
+      if (p.tempo) {
+        const tempo = document.createElement("span");
+        tempo.className = "mark";
+        tempo.textContent = p.tempo;
+        btn.append(tempo);
+      }
+      btn.addEventListener("click", () => render(core.send({ type: "pick", pieceId: p.id })));
+      if (!p.editable) return btn;
+      // My songs: Edit reopens the saved text; Delete asks first (the confirm is the screen's).
+      const row = document.createElement("div");
+      row.className = "song-row";
+      const edit = smallButton("Edit", `Edit ${p.title}`, () => render(core.send({ type: "open", what: "editor", pieceId: p.id })));
+      const del = smallButton("Delete", `Delete ${p.title}`, () => {
+        if (confirm(`Delete "${p.title}"? This can't be undone.`)) render(core.send({ type: "deleteSong", pieceId: p.id }));
+      });
+      row.append(btn, edit, del);
+      return row;
+    })];
+  }));
+}
+
+function smallButton(text, label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "song-action";
+  btn.textContent = text;
+  btn.setAttribute("aria-label", label);
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+els.pieceName.addEventListener("click", () => render(core.send({ type: "open", what: "pieces" })));
+els.piecePart.addEventListener("change", () => render(core.send({ type: "choosePart", part: els.piecePart.value })));
+els.hint.addEventListener("click", (e) => {
+  if (e.target.closest(".hint-close")) render(core.send({ type: "closeHint" }));
+});
+els.piecesClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.addSong.addEventListener("click", () => render(core.send({ type: "open", what: "editor" })));
+els.editorClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.saveSong.addEventListener("click", () => render(core.send({ type: "saveSong", text: els.songText.value })));
+els.copyPrompt.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(shown.overlay.conversionPrompt);
+    els.copyPrompt.textContent = "Copied ✓";
+  } catch {
+    els.copyPrompt.textContent = "Couldn't copy";
+  }
+});
+els.gearBtn.addEventListener("click", () => render(core.send({ type: "open", what: "gear" })));
+els.gearClose.addEventListener("click", () => render(core.send({ type: "close" })));
+els.hintsSwitch.addEventListener("change", () => render(core.send({ type: "setHints", on: els.hintsSwitch.checked })));
+els.tempoSlower.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: -1 })));
+els.tempoFaster.addEventListener("click", () => render(core.send({ type: "nudgeTempo", by: 1 })));
+els.tempoAuto.addEventListener("click", () => render(core.send({ type: "tempoAuto" })));
+els.restartBtn.addEventListener("click", async () => {
+  // The first Start asks for the microphone; the run starts only once it's open.
+  if (!(await openMic())) return;
+  render(core.send({ type: "start" }));
+});
+els.timedSwitch.addEventListener("change", () => render(core.send({ type: "setTimed", on: els.timedSwitch.checked })));
+els.listenBtn.addEventListener("click", () => {
+  openAudio(); // Listen needs sound out, not the mic
+  render(core.send({ type: "listen" }));
+});
+els.listenSlower.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: -1 })));
+els.listenFaster.addEventListener("click", () => render(core.send({ type: "nudgeListenSpeed", by: 1 })));
+
 // --- Audio ---------------------------------------------------------------
+
+let audio = null; // the AudioContext, once Listen or Start has opened it
+
+// Opens (or wakes) the AudioContext. Called from a tap, so the browser lets it make sound.
+function openAudio() {
+  audio ??= new AudioContext();
+  audio.resume();
+  return audio;
+}
+
+// A drum-like voice: a soft-mallet attack and a ringing tone whose overtones die away first,
+// fading out over about the note's length. Returns its parts so it can be cancelled.
+function drumNote(ctx, out, tongue, when, ms) {
+  const f = NOTE_BY_ID[tongue].freq;
+  const ring = Math.min(2.5, Math.max(0.4, (ms / 1000) * 1.5));
+  return [[1, 0.3, 1], [2, 0.05, 0.35], [3, 0.025, 0.2]].map(([mult, amp, decay]) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = f * mult;
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(amp, when + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, when + ring * decay);
+    osc.connect(gain).connect(out);
+    osc.start(when);
+    osc.stop(when + ring * decay + 0.05);
+    return { osc, gain, when };
+  });
+}
+
+// A Timed run's count-in click: a short, high tick, well above the drum's notes.
+function click(ctx, out, when) {
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = 2000;
+  gain.gain.setValueAtTime(0.4, when);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+  osc.connect(gain).connect(out);
+  osc.start(when);
+  osc.stop(when + 0.05);
+  return { osc, gain, when };
+}
+
+// Listen's notes and the Timed count-in. The core says what to play and when, on its clock; a new
+// key replaces whatever was scheduled. Notes already ringing carry on unless the sound stops altogether.
+let voices = [];
+function playSound(sound) {
+  if (!audio) return;
+  const now = audio.currentTime;
+  for (const v of voices) {
+    if (v.when > now) v.osc.stop();
+    else if (!sound) {
+      const g = v.gain.gain; // a quick fade, from wherever the ring has got to
+      (g.cancelAndHoldAtTime ?? g.cancelScheduledValues).call(g, now);
+      g.setTargetAtTime(0, now, 0.03);
+      v.osc.stop(now + 0.2);
+    }
+  }
+  voices = [];
+  if (!sound) return;
+  const offset = now - Date.now() / 1000; // clock ms → audio seconds
+  for (const e of sound.events) {
+    const when = Math.max(now, e.at / 1000 + offset);
+    if (e.kind === "note") voices.push(...drumNote(audio, audio.destination, e.tongue, when, e.ms));
+    if (e.kind === "click") voices.push(click(audio, audio.destination, when));
+  }
+}
 
 async function openInput(ctx) {
   if (SIM) {
@@ -70,8 +332,9 @@ async function openInput(ctx) {
 }
 
 // Feeds the detector a frame every `hop` samples (~60 per second) of continuous audio.
-// Timing comes from the sample count, so a busy or slow device doesn't skip audio.
-async function listen(ctx, input) {
+// Timing comes from the sample count, so a busy or slow device doesn't skip audio. Returns what
+// the frame loop calls to show the level meter (and, with ?debug, what the detector hears).
+async function startDetector(ctx, input) {
   await ctx.audioWorklet.addModule("capture.js");
   const capture = new AudioWorkletNode(ctx, "capture");
   input.connect(capture);
@@ -82,6 +345,7 @@ async function listen(ctx, input) {
   const win = new Float32Array(CONFIG.windowSize);
   const hop = Math.round(ctx.sampleRate / 60);
   let sinceHop = 0, total = 0;
+  let lastReport = ""; // debug: the last strike's three loudest tongues
 
   capture.port.onmessage = ({ data }) => {
     let block = data;
@@ -96,29 +360,35 @@ async function listen(ctx, input) {
         sinceHop = 0;
         const t = (total / ctx.sampleRate) * 1000;
         const strike = listener.process(win, t);
-        // Move the onset from audio time onto the core's clock.
-        if (strike) render(core.send({ type: "strike", tongue: strike.note.id, at: Date.now() - (t - strike.at) }));
+        if (!strike) continue;
+        // Move the onsets from audio time onto the core's clock.
+        const now = Date.now();
+        const clockAt = (at) => now - (t - at);
+        const ranked = strike.ranked.map((r) => ({ ...r, at: clockAt(r.at) }));
+        render(core.send({ type: "strike", tongue: strike.note.id, at: clockAt(strike.at), ranked }));
+        if (DEBUG) {
+          lastReport = `   last strike ${strike.note.id}: ` + strike.ranked.slice(0, 3)
+            .map((r) => `${r.tongue} ${(20 * Math.log10(r.level)).toFixed(0)} dB ${r.at >= strike.at ? "+" : ""}${(r.at - strike.at).toFixed(0)} ms`)
+            .join(" · ");
+        }
       }
     }
   };
 
   const bars = DEBUG ? buildNoteBars() : null;
-  function tick() {
-    requestAnimationFrame(tick);
-    render(core.send({ type: "tick" }));
+  return function showReading() {
     if (!listener.reading) return;
     const { level, notes, floors, heard } = listener.reading;
     els.levelBar.style.width = `${dbPercent(20 * Math.log10(level), -70, -10)}%`;
     if (DEBUG) {
-      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}`;
+      els.debug.textContent = `volume ${(20 * Math.log10(level)).toFixed(0)} dB   loudest ${heard ? heard.note.id : "—"}${lastReport}`;
       notes.forEach((p, k) => {
         bars[k].bar.style.height = `${dbPercent(10 * Math.log10(p), -110, -20)}%`;
         bars[k].floor.style.bottom = `${dbPercent(10 * Math.log10(floors[k]), -110, -20)}%`;
         bars[k].bar.classList.toggle("above", p >= floors[k]);
       });
     }
-  }
-  tick();
+  };
 }
 
 // Maps a dB value onto 0–100% between lo and hi.
@@ -166,32 +436,53 @@ function setupSimKeys(ctx, out) {
   });
 }
 
-// Keep a phone screen from dimming mid-practice.
-async function keepAwake() {
-  try { await navigator.wakeLock?.request("screen"); } catch { /* not supported or denied */ }
-}
-
-els.startBtn.addEventListener("click", async () => {
-  els.startError.hidden = true;
-  try {
-    const ctx = new AudioContext();
-    await ctx.resume();
-    const input = await openInput(ctx);
-    await listen(ctx, input);
-  } catch (err) {
-    els.startError.textContent = window.isSecureContext
-      ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`
-      : "The microphone only works over https:// or on localhost.";
-    els.startError.hidden = false;
+// Keeps a phone screen from dimming while practising. The browser drops the lock when the page
+// is hidden, so it's asked for again on return.
+let wakeLock = null;
+async function keepAwake(on) {
+  if (!on) {
+    wakeLock?.release();
+    wakeLock = null;
     return;
   }
-  els.start.hidden = true;
-  els.play.hidden = false;
-  els.debug.hidden = !DEBUG;
-  els.simHint.hidden = !SIM;
-  render(core.send({ type: "start" }));
-  keepAwake();
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") keepAwake();
-  });
+  if (wakeLock && !wakeLock.released) return;
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch { /* not supported or denied */ }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") keepAwake(shown?.playing);
 });
+
+// The mic (or, with ?sim, the keyboard drum), opened by the first Start. Resolves true once it's
+// listening; on failure it says why and the next Start asks again.
+let micOpen = null;
+function openMic() {
+  micOpen ??= (async () => {
+    els.startError.hidden = true;
+    try {
+      const ctx = openAudio();
+      await ctx.resume();
+      showReading = await startDetector(ctx, await openInput(ctx));
+    } catch (err) {
+      els.startError.textContent = window.isSecureContext
+        ? `Couldn't open the microphone (${err.name || err}). Check that the browser is allowed to use it.`
+        : "The microphone only works over https:// or on localhost.";
+      els.startError.hidden = false;
+      micOpen = null;
+      return false;
+    }
+    els.startHint.hidden = true;
+    els.debug.hidden = !DEBUG;
+    els.simHint.hidden = !SIM;
+    return true;
+  })();
+  return micOpen;
+}
+
+// The screen keeps up with the core every frame, mic or not: Listen, the hint's wait and the
+// finished run's "done" all run on the core's clock.
+let showReading = null; // the level meter, once the mic is open
+(function frame() {
+  requestAnimationFrame(frame);
+  render(core.send({ type: "tick" }));
+  showReading?.();
+})();

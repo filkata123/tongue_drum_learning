@@ -8,26 +8,57 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main id="start" class="screen">
-    <h1>Tongue Drum</h1>
-    <button id="start-btn" type="button">Start</button>
-    <p id="start-hint" class="hint">Allow the microphone when asked, then play the number you see.</p>
-    <p id="start-error" class="error" hidden></p>
-  </main>
-
-  <main id="play" class="screen" hidden>
+  <!-- The main screen, from the moment the app opens: the piece, gear and Listen work before any
+       Start; the first Start asks for the microphone. -->
+  <main id="play" class="screen">
     <header>
-      <span id="melody-name"></span>
-      <span id="progress"></span>
+      <div id="piece-head">
+        <button id="piece-name" type="button" aria-haspopup="dialog">
+          <span id="piece-title"></span>
+        </button>
+        <!-- A two-line piece's part can be chosen here; the app also moves it on after a clean run. -->
+        <small id="piece-sub"><span id="piece-group"></span><select id="piece-part" aria-label="Part" hidden></select></small>
+      </div>
+      <button id="play-gear" class="gear" type="button" aria-label="Settings" aria-haspopup="dialog">⚙</button>
     </header>
 
+    <!-- Listen: plays the part on request; its speed control shows only while it plays. -->
+    <div id="listen-row">
+      <button id="listen-btn" type="button">▶ Listen</button>
+      <div id="listen-speed" hidden>
+        <button id="listen-slower" type="button" aria-label="Slower">−</button>
+        <span id="listen-bpm"></span>
+        <button id="listen-faster" type="button" aria-label="Faster">+</button>
+      </div>
+    </div>
+
     <div id="stage">
-      <div id="current"></div>
-      <div id="next-box">next <span id="next"></span></div>
+      <div id="steps">
+        <!-- The Location hint: the target's half of the drum map, only when you're stuck. -->
+        <div id="hint"></div>
+        <div id="current" class="step"></div>
+        <div id="next">
+          <div class="step"></div>
+          <div class="step"></div>
+          <div class="step"></div>
+        </div>
+      </div>
+      <p id="feedback"></p>
+      <!-- The finished run's score, until the next run's first strike. -->
+      <p id="result"></p>
     </div>
 
     <footer>
-      <p id="feedback"></p>
+      <div id="controls">
+        <button id="restart-btn" type="button">Start</button>
+        <!-- Start begins a Timed run while this is on. -->
+        <label id="timed" class="switch">
+          <input id="timed-switch" type="checkbox">
+          <span>Timed</span>
+        </label>
+      </div>
+      <p id="start-hint" class="hint">Allow the microphone when asked, then play the number you see.</p>
+      <p id="start-error" class="error" hidden></p>
       <p id="debug" hidden></p>
       <div id="note-bars" hidden></div>
       <p id="sim-hint" class="hint" hidden>Sim mode: keys 1–7 = middle row, Z X C V B = lower 3–7, 8 9 0 = upper 1–3</p>
@@ -37,8 +68,54 @@
     <div id="done" hidden>
       <div class="check">✓</div>
       <div id="done-text"></div>
+      <div id="done-result"></div>
+    </div>
+
+    <div id="pieces" role="dialog" aria-label="Pieces" hidden>
+      <div id="pieces-head">
+        <span>Pieces</span>
+        <button id="pieces-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="pieces-progress"></div>
+      <div id="pieces-groups"></div>
+      <button id="add-song" type="button">+ Add song</button>
+    </div>
+
+    <div id="editor" role="dialog" aria-label="Add song" hidden>
+      <div id="editor-head">
+        <span id="editor-title">Add song</span>
+        <button id="editor-close" type="button" aria-label="Close">✕</button>
+      </div>
+      <button id="copy-prompt" type="button">Copy conversion prompt</button>
+      <p class="hint">Paste it into any chatbot with a photo of your sheet, then paste its answer below.</p>
+      <textarea id="song-text" spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="title: …&#10;melody: …&#10;accomp: …"></textarea>
+      <ul id="song-errors"></ul>
+      <button id="save-song" type="button">Save</button>
     </div>
   </main>
+
+  <!-- The settings gear's dialog. -->
+  <div id="gear" role="dialog" aria-label="Settings" hidden>
+    <div id="gear-head">
+      <span>Settings</span>
+      <button id="gear-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <label class="switch">
+      <input id="hints-switch" type="checkbox">
+      <span>Location hints</span>
+    </label>
+    <p class="hint">When you're stuck, show where the note is on the drum.</p>
+    <!-- The current piece's tempo: −/+ lock it, Auto lets it rise after good Timed runs. -->
+    <div id="tempo-row">
+      <span>Tempo</span>
+      <button id="tempo-slower" type="button" aria-label="Slower">−</button>
+      <span id="tempo-bpm"></span>
+      <button id="tempo-faster" type="button" aria-label="Faster">+</button>
+      <button id="tempo-auto" type="button" aria-pressed="false">Auto</button>
+    </div>
+    <p class="hint">Rises by 5 after a Timed run with 9 in 10 notes on time, unless you set it yourself.</p>
+  </div>
 
   <script type="module" src="app.js"></script>
 </body>

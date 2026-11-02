@@ -19,6 +19,8 @@ export const CONFIG = {
   collectMs: 140,       // listen this long after a strike before deciding which note it was
   refractoryMs: 120,    // ignore new strikes this soon after the previous one
   subharmonicRatio: 0.1, // a lower note whose overtone won counts if it rose at least this fraction as much
+  reportMs: 200,        // each tongue's level is read this long after a strike, for the ranked report
+  ringAlongRatio: 100,  // in the ranked report, a neighbour this much louder (20 dB) means the tongue only rang along
 };
 
 export function rms(buf) {
@@ -86,7 +88,10 @@ export class NoteListener {
   constructor(sampleRate, cfg = CONFIG) {
     this.cfg = cfg;
     this.meter = new NoteMeter(sampleRate, cfg.windowSize);
+    this.halfWindowMs = (cfg.windowSize / 2 / sampleRate) * 1000;
     this.history = []; // { t, level, notes } for the last onsetWindowMs
+    this.trail = [];   // { t, notes } for the last onsetWindowMs + reportMs, for the ranked report
+    this.held = null;  // a decided strike, waiting until its ranked report can be read
     this.lastOnset = -Infinity;
     this.collecting = null;
     this.lastNote = -1;     // index of the last note recognised
@@ -116,10 +121,46 @@ export class NoteListener {
   }
 
   // Feed one frame (Float32Array, at least cfg.windowSize long) captured at time `t` (ms).
-  // Returns { note, amp, at } when a strike is recognised, otherwise null; `at` is the strike's
-  // onset, on the same timeline as `t`.
+  // Returns { note, amp, at, ranked } when a strike is recognised, otherwise null; `at` is the
+  // strike's onset, on the same timeline as `t`. The note is decided collectMs after the onset,
+  // but returned reportMs after it, so that it can carry `ranked`: every tongue's level then,
+  // [{ tongue, level, at, heard, ringAlong }], loudest first. That's what a chord is judged on.
   // The latest per-frame reading is kept on `this.reading` for display.
   process(buf, t) {
+    const cfg = this.cfg;
+    const strike = this.listen(buf, t);
+    this.trail.push({ t, notes: this.reading.notes });
+    while (t - this.trail[0].t > cfg.onsetWindowMs + cfg.reportMs) this.trail.shift();
+    if (strike) this.held = strike;
+    if (!this.held || t - this.held.at < cfg.reportMs) return null;
+    const held = this.held;
+    this.held = null;
+    return { ...held, ranked: this.rank() };
+  }
+
+  // Every tongue's latest level (an amplitude, like `amp`), loudest first, with whether it's above
+  // its background (`heard`), whether a much louder neighbour explains it (`ringAlong`: a loud 4
+  // makes 3 and 5 ring along about 30 dB down, as loud as a softly struck _4), and when it started
+  // sounding: the frame from
+  // which it has stayed at least half as loud as now, less half a window, since a new sound
+  // reaches half its level once it fills half the window. A tongue that has been that loud for
+  // the whole trail was already ringing before this strike, and gets the trail's start.
+  rank() {
+    const now = this.trail[this.trail.length - 1].notes;
+    const { floors } = this.reading;
+    return DRUM_NOTES.map((n, k) => {
+      let i = this.trail.length - 1;
+      while (i > 0 && this.trail[i - 1].notes[k] >= now[k] / 4) i--;
+      return {
+        tongue: n.id, level: Math.sqrt(now[k]), at: this.trail[i].t - this.halfWindowMs,
+        heard: now[k] >= floors[k],
+        ringAlong: NEIGHBOURS[k].some((j) => now[j] >= now[k] * this.cfg.ringAlongRatio),
+      };
+    }).sort((a, b) => b.level - a.level);
+  }
+
+  // process() without the ranked report: returns the strike as soon as its note is decided.
+  listen(buf, t) {
     const cfg = this.cfg;
     const level = rms(buf.subarray(buf.length - cfg.onsetSize));
     const notes = this.meter.levels(buf);
